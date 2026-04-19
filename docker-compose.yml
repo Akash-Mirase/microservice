@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+
+  auth-service:
+    build: .
+    command: node auth-service.js
+    ports:
+      - "4001:4001"
+    restart: always
+
+  user-service:
+    build: .
+    command: node user-service.js
+    ports:
+      - "4002:4002"
+    restart: always
+
+  order-service:
+    build: .
+    command: node order-service.js
+    ports:
+      - "4003:4003"
+    restart: always
+
+  payment-service:
+    build: .
+    command: node payment-service.js
+    ports:
+      - "4004:4004"
+    restart: always
+
+  api-gateway:
+    build: .
+    command: node api-gateway.js
+    ports:
+      - "4000:4000"
+    restart: always
+    depends_on:
+      - auth-service
+      - order-service
+      - payment-service
+
+  central-server:
+   build: .
+   command: node central-server/server.js
+   ports:
+    - "5000:5000"
+   restart: unless-stopped
+   volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+   depends_on:
+      - auth-service
+      - user-service
+      - order-service
+      - payment-service
+
+  prometheus:
+   image: prom/prometheus
+   ports:
+    - "9090:9090"
+   volumes:
+    - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+   image: grafana/grafana
+   ports:
+    - "3001:3000"
+   depends_on:
+    - prometheus
+    - loki
+
+  cadvisor:
+   image: gcr.io/cadvisor/cadvisor:latest
+   ports:
+    - "8080:8080"
+   volumes:
+    - /:/rootfs:ro
+    - /var/run:/var/run:rw
+    - /sys:/sys:ro
+    - /var/lib/docker:/var/lib/docker:ro
+
+  loki:
+   image: grafana/loki:latest
+   ports:
+    - "3100:3100"
+
+  promtail:
+   image: grafana/promtail:latest
+   volumes:
+    - ./promtail-config.yml:/etc/promtail/config.yml
+    - /var/lib/docker/containers:/var/lib/docker/containers:ro
+   command: -config.file=/etc/promtail/config.yml
+
