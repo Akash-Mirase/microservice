@@ -1,0 +1,47 @@
+services:
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "3000:3000"
+
+  user-service:
+    build: ./user-service
+    ports:
+      - "3001:3001"
+
+  auth-service:
+    build: ./auth-service
+    ports:
+      - "3002:3002"
+
+  order-service:
+    build: ./order-service
+    ports:
+      - "3003:3003"
+
+  payment-service:
+    build: ./payment-service
+    ports:
+      - "3004:3004"
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3005:3000"
+    depends_on:
+      - prometheus
+
+  central-server:
+    build: ./central-server
+    depends_on:
+      - user-service
+      - auth-service
+      - order-service
+      - payment-service
