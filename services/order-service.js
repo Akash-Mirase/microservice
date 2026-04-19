@@ -4,6 +4,14 @@ const app = express();
 
 app.use(express.json());
 
+app.get('/health', (req, res) => {
+    res.json({
+        service: "user",
+        status: "UP"
+    });
+});
+
+
 app.post('/order', async (req, res) => {
     try {
         console.log("Processing order...");
@@ -21,10 +29,6 @@ app.post('/order', async (req, res) => {
     }
 
 
-});
-
-app.get('/health', (req, res) => {
-    res.send({ status: "OK", service: "order-service" });
 });
 
 app.listen(4003, () => {

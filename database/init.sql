@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS users(
+id SERIAL PRIMARY KEY,
+name TEXT,
+email TEXT UNIQUE,
+password TEXT
+);
+
+CREATE TABLE IF NOT EXISTS logs(
+id SERIAL PRIMARY KEY,
+service_name TEXT,
+status TEXT,
+message TEXT,
+created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS metrics(
+id SERIAL PRIMARY KEY,
+service_name TEXT,
+cpu FLOAT,
+memory FLOAT,
+created_at TIMESTAMP DEFAULT NOW()
+);

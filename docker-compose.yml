@@ -4,35 +4,35 @@ services:
 
   auth-service:
     build: .
-    command: node auth-service.js
+    command: node services/auth-service.js
     ports:
       - "4001:4001"
     restart: always
 
   user-service:
     build: .
-    command: node user-service.js
+    command: node services/user-service.js
     ports:
       - "4002:4002"
     restart: always
 
   order-service:
     build: .
-    command: node order-service.js
+    command: node services/order-service.js
     ports:
       - "4003:4003"
     restart: always
 
   payment-service:
     build: .
-    command: node payment-service.js
+    command: node services/payment-service.js
     ports:
       - "4004:4004"
     restart: always
 
   api-gateway:
     build: .
-    command: node api-gateway.js
+    command: node gateway/api-gateway.js
     ports:
       - "4000:4000"
     restart: always
@@ -60,7 +60,7 @@ services:
    ports:
     - "9090:9090"
    volumes:
-    - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
 
   grafana:
    image: grafana/grafana
@@ -88,7 +88,20 @@ services:
   promtail:
    image: grafana/promtail:latest
    volumes:
-    - ./promtail-config.yml:/etc/promtail/config.yml
+    - ./monitoring/promtail-config.yml:/etc/promtail/config.yml
     - /var/lib/docker/containers:/var/lib/docker/containers:ro
    command: -config.file=/etc/promtail/config.yml
+
+  postgres:
+   image: postgres:15
+   container_name: self-healing-system-postgres-1
+   environment:
+     POSTGRES_USER: admin
+     POSTGRES_PASSWORD: admin123
+     POSTGRES_DB: selfhealing
+   ports:
+    - "5432:5432"
+   volumes:
+    - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+   restart: unless-stopped
 
