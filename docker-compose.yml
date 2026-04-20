@@ -41,6 +41,12 @@ services:
       - order-service
       - payment-service
 
+  ml-service:
+    build: ./ml-service
+    ports:
+      - "5001:5000"
+    restart: always
+
   central-server:
    build: .
    command: node central-server/server.js
@@ -54,6 +60,7 @@ services:
       - user-service
       - order-service
       - payment-service
+      - ml-service
 
   prometheus:
    image: prom/prometheus
