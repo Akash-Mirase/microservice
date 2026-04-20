@@ -48,6 +48,33 @@ async function checkServices() {
 
             await saveMetric(s.name, cpu, memory);
 
+            // ML Anomaly Detection
+            try {
+                // Get last 100 metrics in chronological order
+                const result = await pool.query(
+                    'SELECT cpu, memory FROM (SELECT cpu, memory, created_at FROM metrics WHERE service_name=$1 ORDER BY created_at DESC LIMIT 100) AS sub ORDER BY created_at ASC',
+                    [s.name]
+                );
+                
+                if (result.rows.length >= 10) {
+                    const mlRes = await axios.post('http://ml-service:5000/predict', result.rows);
+                    if (mlRes.data.status === 'ANOMALY') {
+                        console.log(`⚠️ Anomaly detected for ${s.name}! (CPU: ${cpu}, Mem: ${memory})`);
+                        await saveLog(s.name, "ANOMALY", "ML model detected an anomaly");
+                        
+                        // Restart container using the same pattern as health checks
+                        const container = `self-healing-system-${s.name}-service-1`;
+                        execFile("docker", ["restart", container], async () => {
+                            console.log(`🔄 ${s.name} restarted due to anomaly`);
+                            await saveLog(s.name, "RECOVERED", "Restarted automatically after anomaly");
+                        });
+                    }
+                }
+            } catch (mlErr) {
+                // Silently handle ML service not available or errors
+                // console.error("ML Prediction error:", mlErr.message);
+            }
+
         } catch (err) {
             console.log(`${s.name} FAILED`);
 
