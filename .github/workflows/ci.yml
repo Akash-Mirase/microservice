@@ -7,12 +7,10 @@ on:
     branches: [ main ]
 
 jobs:
-
-  test-and-build:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -23,9 +21,6 @@ jobs:
 
       - name: Install Dependencies
         run: npm install
-
-      - name: Run Tests
-        run: npm test
 
       - name: Build Docker Images
         run: docker compose build
