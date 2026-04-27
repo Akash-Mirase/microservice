@@ -20,3 +20,11 @@ cpu FLOAT,
 memory FLOAT,
 created_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE TABLE orders(
+ id SERIAL PRIMARY KEY,
+ user_id INT,
+ amount NUMERIC,
+ status TEXT,
+ created_at TIMESTAMP DEFAULT NOW()
+);
