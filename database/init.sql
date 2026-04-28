@@ -21,7 +21,7 @@ memory FLOAT,
 created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE TABLE orders(
+CREATE TABLE IF NOT EXISTS orders(
  id SERIAL PRIMARY KEY,
  user_id INT,
  amount NUMERIC,

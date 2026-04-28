@@ -32,8 +32,3 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["notification-service:4005"]
-
-  - job_name: "monitoring-service"
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["monitoring-service:4006"]

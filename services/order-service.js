@@ -4,6 +4,7 @@ const axios = require("axios");
 const { Pool } = require("pg");
 const { Kafka } = require("kafkajs");
 const client = require("prom-client");
+const CircuitBreaker = require("opossum");
 
 dotenv.config();
 
@@ -55,6 +56,24 @@ app.get("/health", (req, res) => {
   });
 });
 
+async function paymentCall(data) {
+  const res = await axios.post(
+    "http://payment-service:4004/pay",
+    data
+  );
+  return res.data;
+}
+
+const breaker = new CircuitBreaker(paymentCall, {
+  timeout: 3000,
+  errorThresholdPercentage: 50,
+  resetTimeout: 5000
+});
+
+breaker.fallback(() => {
+  return { status: "PENDING", message: "Payment delayed" };
+});
+
 /* CREATE ORDER */
 
 app.post("/create", async (req, res) => {
@@ -62,6 +81,7 @@ app.post("/create", async (req, res) => {
     const userId = req.headers["x-user-id"];
     const { amount } = req.body;
 
+    /* Step 1: Insert Order */
     const result = await pool.query(
       `INSERT INTO orders(user_id, amount, status)
        VALUES($1,$2,$3)
@@ -71,19 +91,21 @@ app.post("/create", async (req, res) => {
 
     const order = result.rows[0];
 
-    const paymentResponse = await axios.post(
-      "http://payment-service:4004/pay",
-      {
-        orderId: order.id,
-        amount
-      }
-    );
+    /* Step 2: Payment via Circuit Breaker */
+    const paymentResponse = await breaker.fire({
+      orderId: order.id,
+      amount
+    });
 
-    await pool.query(
-      "UPDATE orders SET status=$1 WHERE id=$2",
-      ["PAID", order.id]
-    );
+    /* Step 3: Update Status ONLY if success */
+    if (paymentResponse.status !== "PENDING") {
+      await pool.query(
+        "UPDATE orders SET status=$1 WHERE id=$2",
+        ["PAID", order.id]
+      );
+    }
 
+    /* Step 4: Kafka Event */
     try {
       await producer.send({
         topic: "order-events",
@@ -98,19 +120,18 @@ app.post("/create", async (req, res) => {
           }
         ]
       });
-    } catch (err) {
+    } catch {
       console.log("Kafka send failed");
     }
 
     res.status(201).json({
       message: "Order created successfully",
       orderId: order.id,
-      payment: paymentResponse.data
+      payment: paymentResponse
     });
 
   } catch (err) {
     console.error(err);
-
     res.status(500).json({
       error: "Order creation failed"
     });
