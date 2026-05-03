@@ -27,23 +27,23 @@ services:
   # ---------------- KAFKA ---------------- #
 
   zookeeper:
-   image: confluentinc/cp-zookeeper:7.4.0
-   environment:
-    ZOOKEEPER_CLIENT_PORT: 2181
-   healthcheck:
-     test: ["CMD", "nc", "-z", "localhost", "2181"]
-     interval: 5s
-     timeout: 5s
-     retries: 10
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "2181" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   kafka:
-   image: confluentinc/cp-kafka:7.4.0
-   depends_on:
-     zookeeper:
-       condition: service_healthy
-   ports:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
       - "9092:9092"
-   environment:
+    environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
 
@@ -52,7 +52,7 @@ services:
 
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-   restart: always
+    restart: always
 
   # ---------------- SERVICES ---------------- #
 
@@ -116,6 +116,21 @@ services:
       - auth-service
       - user-service
       - order-service
+    restart: always
+
+  monitoring-service:
+    build: .
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: node services/monitoring-service.js
+    ports:
+      - "4006:4006"
+    depends_on:
+      - auth-service
+      - user-service
+      - order-service
+      - payment-service
+      - notification-service
     restart: always
 
   # ---------------- MONITORING ---------------- #

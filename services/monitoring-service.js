@@ -1,119 +1,92 @@
-const express = require("express");
-const axios = require("axios");
-const dotenv = require("dotenv");
+const express = require('express')
+const axios = require('axios')
+const nodemailer = require('nodemailer')
 
-dotenv.config();
+const app = express()
+app.use(express.json())
 
-const app = express();
-app.use(express.json());
-
-/* ---------------- SERVICES ---------------- */
+/* ---------------- SERVICES TO MONITOR ---------------- */
 
 const services = [
+  { name: 'auth-service', url: 'http://auth-service:4001/health' },
+  { name: 'user-service', url: 'http://user-service:4002/health' },
+  { name: 'order-service', url: 'http://order-service:4003/health' },
+  { name: 'payment-service', url: 'http://payment-service:4004/health' },
   {
-    name: "auth-service",
-    url: "http://auth-service:4001/health"
-  },
-  {
-    name: "user-service",
-    url: "http://user-service:4002/health"
-  },
-  {
-    name: "order-service",
-    url: "http://order-service:4003/health"
-  },
-  {
-    name: "payment-service",
-    url: "http://payment-service:4004/health"
-  },
-  {
-    name: "notification-service",
-    url: "http://notification-service:4005/health"
-  },
-  {
-    name: "api-gateway",
-    url: "http://api-gateway:4000/health"
+    name: 'notification-service',
+    url: 'http://notification-service:4005/health'
   }
-];
+]
 
-/* ---------------- HEALTH ---------------- */
+/* ---------------- CHECK HEALTH ---------------- */
 
-app.get("/health", (req, res) => {
-  res.json({
-    service: "monitoring-service",
-    status: "UP"
-  });
-});
-
-/* ---------------- CHECK ALL SERVICES ---------------- */
-
-app.get("/status", async (req, res) => {
-  const results = [];
-
-  for (const service of services) {
-    const start = Date.now();
-
+async function checkServices () {
+  for (let service of services) {
     try {
-      await axios.get(service.url, {
-        timeout: 3000
-      });
+      const res = await axios.get(service.url)
+      console.log(`✅ ${service.name} is UP`)
+    } catch (err) {
+      console.error(`❌ ${service.name} is DOWN`)
 
-      const responseTime = Date.now() - start;
-
-      results.push({
-        service: service.name,
-        status: "UP",
-        responseTime: `${responseTime} ms`
-      });
-
-    } catch {
-      results.push({
-        service: service.name,
-        status: "DOWN",
-        responseTime: "N/A"
-      });
+      await handleFailure(service.name)
     }
   }
+}
 
-  res.json(results);
-});
+/* ---------------- SELF-HEALING ACTION ---------------- */
 
-/* ---------------- SUMMARY ---------------- */
+async function handleFailure (serviceName) {
+  await sendAlert(serviceName);
+  console.log(`🛠 Attempting to recover ${serviceName}...`)
 
-app.get("/summary", async (req, res) => {
-  const output = {
-    totalServices: services.length,
-    up: 0,
-    down: 0
-  };
+  try {
+    // 🔥 Restart container (Docker command)
+    const { exec } = require('child_process')
 
-  for (const service of services) {
-    try {
-      await axios.get(service.url, {
-        timeout: 3000
-      });
-
-      output.up++;
-
-    } catch {
-      output.down++;
-    }
+    exec(`docker restart self-healing-system-${serviceName}-1`, err => {
+      if (err) {
+        console.error(`❌ Failed to restart ${serviceName}`)
+      } else {
+        console.log(`🔁 Restarted ${serviceName}`)
+      }
+    })
+  } catch (err) {
+    console.error('Recovery failed:', err.message)
   }
+}
 
-  res.json(output);
-});
+require("dotenv").config();
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+}); 
+
+async function sendAlert(serviceName) {
+  try {
+    await transporter.sendMail({
+      from: "sahaydoot@gmail.com",
+      to: "akashmirase6@gmail.com",
+      subject: `🚨 Service Down: ${serviceName}`,
+      text: `${serviceName} is DOWN and was restarted by self-healing system.`
+    });
+
+    console.log(`📧 Alert sent for ${serviceName}`);
+
+  } catch (err) {
+    console.error("❌ Email failed:", err.message);
+  }
+}
+
+/* ---------------- RUN EVERY 10 SEC ---------------- */
+
+setInterval(checkServices, 10000)
 
 /* ---------------- SERVER ---------------- */
 
-const PORT = process.env.MONITOR_PORT || 4006;
-const client = require("prom-client");
-client.collectDefaultMetrics();
-
-app.get("/metrics", async (req, res) => {
-  res.set("Content-Type", client.register.contentType);
-  res.end(await client.register.metrics());
-});
-
-app.listen(PORT, () => {
-  console.log(`Monitoring Service running on port ${PORT}`);
-});
+app.listen(4006, () => {
+  console.log('🧠 Monitoring Service running on port 4006')
+})
