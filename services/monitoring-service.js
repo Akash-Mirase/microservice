@@ -34,7 +34,7 @@ async function getContainerStats (containerName) {
     const systemDelta =
       stats.cpu_stats.system_cpu_usage - stats.precpu_stats.system_cpu_usage
 
-    const cpu = (cpuDelta / systemDelta) * 100
+    const cpu = (cpuDelta / systemDelta) * stats.cpu_stats.online_cpus * 100
 
     const memory = (stats.memory_stats.usage / stats.memory_stats.limit) * 100
 
