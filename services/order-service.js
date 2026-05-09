@@ -1,17 +1,19 @@
-const express = require("express");
-const dotenv = require("dotenv");
-const axios = require("axios");
-const { Pool } = require("pg");
-const { Kafka } = require("kafkajs");
-const client = require("prom-client");
-const CircuitBreaker = require("opossum");
+const express = require('express')
+const dotenv = require('dotenv')
+const axios = require('axios')
+const { Pool } = require('pg')
+const { Kafka } = require('kafkajs')
+const client = require('prom-client')
+const CircuitBreaker = require('opossum')
+const cors = require('cors')
 
-dotenv.config();
+dotenv.config()
 
-const app = express();
-app.use(express.json());
+const app = express()
+app.use(cors())
+app.use(express.json())
 
-client.collectDefaultMetrics();
+client.collectDefaultMetrics()
 
 /* DATABASE */
 
@@ -21,154 +23,159 @@ const pool = new Pool({
   user: process.env.DB_USER,
   password: process.env.DB_PASS,
   database: process.env.DB_NAME
-});
+})
 
 /* KAFKA */
 
 const kafka = new Kafka({
-  clientId: "order-service",
-  brokers: ["kafka:9092"]
-});
+  clientId: 'order-service',
+  brokers: ['kafka:9092']
+})
 
-const producer = kafka.producer();
+const producer = kafka.producer()
 
-async function connectKafka() {
+async function connectKafka () {
   while (true) {
     try {
-      await producer.connect();
-      console.log("✅ Kafka Producer Connected");
-      break;
+      await producer.connect()
+      console.log('✅ Kafka Producer Connected')
+      break
     } catch (err) {
-      console.log("⏳ Waiting for Kafka...");
-      await new Promise(r => setTimeout(r, 5000));
+      console.log('⏳ Waiting for Kafka...')
+      await new Promise(r => setTimeout(r, 5000))
     }
   }
 }
 
-connectKafka();
+connectKafka()
 
 /* HEALTH */
 
-app.get("/health", (req, res) => {
+app.get('/health', (req, res) => {
   res.json({
-    service: "order-service",
-    status: "UP"
-  });
-});
+    service: 'order-service',
+    status: 'UP'
+  })
+})
 
-async function paymentCall(data) {
-  const res = await axios.post(
-    "http://payment-service:4004/pay",
-    data
-  );
-  return res.data;
+async function paymentCall (data) {
+  const res = await axios.post('http://payment-service:4004/pay', data)
+  return res.data
 }
 
 const breaker = new CircuitBreaker(paymentCall, {
   timeout: 3000,
   errorThresholdPercentage: 50,
   resetTimeout: 5000
-});
+})
 
 breaker.fallback(() => {
-  return { status: "PENDING", message: "Payment delayed" };
-});
+  return { status: 'PENDING', message: 'Payment delayed' }
+})
 
 /* CREATE ORDER */
 
-app.post("/create", async (req, res) => {
+app.post('/create', async (req, res) => {
   try {
-    const userId = req.headers["x-user-id"];
-    const { amount } = req.body;
+    const userId = req.headers['x-user-id']
+    const { amount } = req.body
 
     /* Step 1: Insert Order */
     const result = await pool.query(
       `INSERT INTO orders(user_id, amount, status)
        VALUES($1,$2,$3)
        RETURNING *`,
-      [userId, amount, "PENDING"]
-    );
+      [userId, amount, 'PENDING']
+    )
 
-    const order = result.rows[0];
+    const order = result.rows[0]
 
     /* Step 2: Payment via Circuit Breaker */
     const paymentResponse = await breaker.fire({
       orderId: order.id,
       amount
-    });
+    })
 
     /* Step 3: Update Status ONLY if success */
-    if (paymentResponse.status !== "PENDING") {
-      await pool.query(
-        "UPDATE orders SET status=$1 WHERE id=$2",
-        ["PAID", order.id]
-      );
+    if (paymentResponse.status !== 'PENDING') {
+      await pool.query('UPDATE orders SET status=$1 WHERE id=$2', [
+        'PAID',
+        order.id
+      ])
     }
 
     /* Step 4: Kafka Event */
     try {
       await producer.send({
-        topic: "order-events",
+        topic: 'order-events',
         messages: [
           {
             value: JSON.stringify({
-              event: "ORDER_CREATED",
+              event: 'ORDER_CREATED',
               orderId: order.id,
               userId,
               amount
             })
           }
         ]
-      });
+      })
     } catch {
-      console.log("Kafka send failed");
+      console.log('Kafka send failed')
     }
 
     res.status(201).json({
-      message: "Order created successfully",
+      message: 'Order created successfully',
       orderId: order.id,
       payment: paymentResponse
-    });
-
+    })
   } catch (err) {
-    console.error(err);
+    console.error(err)
     res.status(500).json({
-      error: "Order creation failed"
-    });
+      error: 'Order creation failed'
+    })
   }
-});
+})
 
 /* MY ORDERS */
 
-app.get("/my-orders", async (req, res) => {
+app.get('/my-orders', async (req, res) => {
   try {
-    const userId = req.headers["x-user-id"];
+    const userId = req.headers['x-user-id']
 
     const result = await pool.query(
-      "SELECT * FROM orders WHERE user_id=$1 ORDER BY id DESC",
+      'SELECT * FROM orders WHERE user_id=$1 ORDER BY id DESC',
       [userId]
-    );
+    )
 
-    res.json(result.rows);
-
+    res.json(result.rows)
   } catch {
     res.status(500).json({
-      error: "Failed to fetch orders"
-    });
+      error: 'Failed to fetch orders'
+    })
   }
-});
+})
+
+app.get('/stress', (req, res) => {
+  const end = Date.now() + 15000
+
+  while (Date.now() < end) {
+    Math.sqrt(Math.random())
+  }
+
+  res.send('CPU stress completed')
+})
 
 /* METRICS */
 
-app.get("/metrics", async (req, res) => {
-  res.set("Content-Type", client.register.contentType);
-  res.end(await client.register.metrics());
-});
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', client.register.contentType)
+  res.end(await client.register.metrics())
+})
 
 /* SERVER */
 
-const PORT = process.env.ORDER_PORT || 4003;
+const PORT = process.env.ORDER_PORT || 4003
 
 app.listen(PORT, () => {
-  console.log(`Order Service running on port ${PORT}`);
-});
+  console.log(`Order Service running on port ${PORT}`)
+})

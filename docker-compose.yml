@@ -11,11 +11,14 @@ services:
     ports:
       - "5432:5432"
     volumes:
+      - postgres-data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U admin" ]
       interval: 5s
       retries: 5
+    networks:
+      - selfhealing-network
 
   # ---------------- REDIS ---------------- #
 
@@ -23,6 +26,8 @@ services:
     image: redis:7
     ports:
       - "6379:6379"
+    networks:
+      - selfhealing-network
 
   # ---------------- KAFKA ---------------- #
 
@@ -35,6 +40,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - selfhealing-network
 
   kafka:
     image: confluentinc/cp-kafka:7.4.0
@@ -52,6 +59,17 @@ services:
 
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "kafka-topics --bootstrap-server localhost:9092 --list"
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      - selfhealing-network
     restart: always
 
   # ---------------- SERVICES ---------------- #
@@ -64,6 +82,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - selfhealing-network
     restart: always
 
   user-service:
@@ -74,6 +94,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - selfhealing-network
     restart: always
 
   order-service:
@@ -85,9 +107,11 @@ services:
       postgres:
         condition: service_healthy
       kafka:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_started
+    networks:
+      - selfhealing-network
     restart: always
 
   payment-service:
@@ -95,6 +119,8 @@ services:
     command: node services/payment-service.js
     ports:
       - "4004:4004"
+    networks:
+      - selfhealing-network
     restart: always
 
   notification-service:
@@ -104,7 +130,9 @@ services:
       - "4005:4005"
     depends_on:
       kafka:
-        condition: service_started
+        condition: service_healthy
+    networks:
+      - selfhealing-network
     restart: always
 
   api-gateway:
@@ -116,6 +144,8 @@ services:
       - auth-service
       - user-service
       - order-service
+    networks:
+      - selfhealing-network
     restart: always
 
   monitoring-service:
@@ -131,7 +161,29 @@ services:
       - order-service
       - payment-service
       - notification-service
+      - ml-service
+    networks:
+      - selfhealing-network
     restart: always
+
+  ml-service:
+    build:
+      context: .
+      dockerfile: ml-service/Dockerfile.ml
+    command: python ml-service/app.py
+    ports:
+      - "5000:5000"
+    networks:
+      - selfhealing-network
+    restart: always
+
+  traffic-generator:
+    build: .
+    command: node services/traffic-generator.js
+    depends_on:
+      - order-service
+    networks:
+      - selfhealing-network
 
   # ---------------- MONITORING ---------------- #
 
@@ -140,11 +192,26 @@ services:
     ports:
       - "9090:9090"
     volumes:
+      - prometheus-data:/prometheus
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - selfhealing-network
 
   grafana:
     image: grafana/grafana
     ports:
       - "3001:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
     depends_on:
       - prometheus
+    networks:
+      - selfhealing-network
+
+volumes:
+  postgres-data:
+  grafana-storage:
+  prometheus-data:
+
+networks:
+  selfhealing-network:

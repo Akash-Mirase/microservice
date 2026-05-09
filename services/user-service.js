@@ -2,6 +2,7 @@ const express = require("express");
 const dotenv = require("dotenv");
 const { Pool } = require("pg");
 const { createClient } = require("redis");
+const cors = require("cors");
 
 const redisClient = createClient({
   url: "redis://redis:6379"
@@ -14,6 +15,7 @@ redisClient.connect()
 dotenv.config();
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 /* ---------------- DATABASE ---------------- */

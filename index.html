@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>Centralized Self-Healing Platform</title>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #0f172a;
+      color: white;
+      font-family: Arial, sans-serif;
+      padding: 25px;
+    }
+
+    .container {
+      max-width: 1600px;
+      margin: auto;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      gap: 20px;
+    }
+
+    .title h1 {
+      font-size: 42px;
+      margin-bottom: 10px;
+    }
+
+    .title p {
+      color: #94a3b8;
+      font-size: 18px;
+    }
+
+    .system-box {
+      background: #111827;
+      border: 1px solid #1e293b;
+      border-radius: 20px;
+      padding: 25px;
+      min-width: 250px;
+      text-align: center;
+    }
+
+    .system-box h2 {
+      color: #22c55e;
+      margin-top: 10px;
+      font-size: 30px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+
+    .metric-card {
+      background: #111827;
+      border: 1px solid #1e293b;
+      border-radius: 20px;
+      padding: 25px;
+    }
+
+    .metric-card h3 {
+      color: #94a3b8;
+      margin-bottom: 10px;
+    }
+
+    .metric-value {
+      font-size: 40px;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+
+    .panel {
+      background: #111827;
+      border: 1px solid #1e293b;
+      border-radius: 20px;
+      padding: 25px;
+      margin-bottom: 30px;
+    }
+
+    .panel h2 {
+      margin-bottom: 20px;
+    }
+
+    .incident-stage {
+      display: inline-block;
+      padding: 10px 16px;
+      border-radius: 12px;
+      background: #78350f;
+      color: #facc15;
+      margin-top: 15px;
+      font-weight: bold;
+    }
+
+    .services-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }
+
+    .service-card {
+      background: #1e293b;
+      border-radius: 20px;
+      padding: 25px;
+    }
+
+    .service-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .service-top h3 {
+      font-size: 24px;
+    }
+
+    .badge {
+      padding: 8px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .up {
+      background: #14532d;
+      color: #22c55e;
+    }
+
+    .down {
+      background: #7f1d1d;
+      color: #f87171;
+    }
+
+    .recovering {
+      background: #78350f;
+      color: #facc15;
+      animation: pulse 1s infinite;
+    }
+
+    .metric {
+      margin-top: 18px;
+    }
+
+    .metric p {
+      margin-bottom: 5px;
+    }
+
+    .progress {
+      width: 100%;
+      height: 10px;
+      background: #334155;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+    }
+
+    .cpu {
+      background: #3b82f6;
+    }
+
+    .memory {
+      background: #a855f7;
+    }
+
+    button {
+      margin-top: 20px;
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 12px;
+      background: #2563eb;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+      transition: 0.3s;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    .topology {
+      margin-top: 20px;
+    }
+
+    .topology-row {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+      margin: 20px 0;
+      flex-wrap: wrap;
+    }
+
+    .topology-line {
+      width: 4px;
+      height: 30px;
+      background: #334155;
+      margin: auto;
+    }
+
+    .topology-node {
+      width: 180px;
+      padding: 20px;
+      border-radius: 15px;
+      text-align: center;
+      font-weight: bold;
+      transition: 0.3s;
+    }
+
+    .topology-node.up {
+      background: #14532d;
+      color: #22c55e;
+    }
+
+    .topology-node.down {
+      background: #7f1d1d;
+      color: #f87171;
+    }
+
+    .topology-node.recovering {
+      background: #78350f;
+      color: #facc15;
+      animation: pulse 1s infinite;
+    }
+
+    .events {
+      max-height: 450px;
+      overflow-y: auto;
+    }
+
+    .event {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 15px;
+      margin-bottom: 12px;
+      font-family: monospace;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    iframe {
+      width: 100%;
+      height: 500px;
+      border: none;
+      border-radius: 15px;
+      background: white;
+    }
+
+    footer {
+      margin-top: 40px;
+      text-align: center;
+      color: #64748b;
+    }
+
+    @keyframes pulse {
+
+      0% {
+        transform: scale(1);
+      }
+
+      50% {
+        transform: scale(1.03);
+      }
+
+      100% {
+        transform: scale(1);
+      }
+    }
+
+    @media(max-width: 1000px) {
+
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+
+  </style>
+</head>
+
+<body>
+
+  <div class="container">
+
+    <!-- HEADER -->
+
+    <div class="header">
+
+      <div class="title">
+        <h1>Centralized Self-Healing Platform</h1>
+
+        <p>
+          Intelligent Resilience & Recovery Dashboard
+        </p>
+      </div>
+
+      <div class="system-box">
+        <div>Platform State</div>
+        <h2 id="system-status">Operational</h2>
+      </div>
+
+    </div>
+
+    <!-- METRICS -->
+
+    <div class="metrics">
+
+      <div class="metric-card">
+        <h3>Active Services</h3>
+        <div class="metric-value" id="active-services">0/0</div>
+        <p>Operational microservices</p>
+      </div>
+
+      <div class="metric-card">
+        <h3>Recovery Actions</h3>
+        <div class="metric-value" id="recovery-count">0</div>
+        <p>Automated recoveries executed</p>
+      </div>
+
+      <div class="metric-card">
+        <h3>Average Recovery</h3>
+        <div class="metric-value">14 sec</div>
+        <p>Mean recovery latency</p>
+      </div>
+
+      <div class="metric-card">
+        <h3>Detection Accuracy</h3>
+        <div class="metric-value">96%</div>
+        <p>Anomaly detection precision</p>
+      </div>
+
+    </div>
+
+    <!-- INCIDENT -->
+
+    <div class="panel">
+
+      <h2>Current Incident</h2>
+
+      <div id="incident-box">
+        No active incidents
+      </div>
+
+    </div>
+
+    <!-- TOPOLOGY -->
+
+    <div class="panel">
+
+      <h2>Distributed Service Topology</h2>
+
+      <div class="topology">
+
+        <div class="topology-row">
+          <div class="topology-node up"
+               id="api-gateway-node">
+            API Gateway
+          </div>
+        </div>
+
+        <div class="topology-line"></div>
+
+        <div class="topology-row">
+
+          <div class="topology-node up"
+               id="auth-service-node">
+            Auth Service
+          </div>
+
+          <div class="topology-node up"
+               id="user-service-node">
+            User Service
+          </div>
+
+        </div>
+
+        <div class="topology-line"></div>
+
+        <div class="topology-row">
+
+          <div class="topology-node up"
+               id="order-service-node">
+            Order Service
+          </div>
+
+          <div class="topology-node up"
+               id="payment-service-node">
+            Payment Service
+          </div>
+
+        </div>
+
+        <div class="topology-line"></div>
+
+        <div class="topology-row">
+
+          <div class="topology-node up"
+               id="notification-service-node">
+            Notification Service
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- SERVICES -->
+
+    <div class="panel">
+
+      <h2>Service Health Overview</h2>
+
+      <div class="services-grid"
+           id="services-container">
+      </div>
+
+    </div>
+
+    <!-- CHARTS + EVENTS -->
+
+    <div class="dashboard-grid">
+
+      <!-- CHART -->
+
+      <div class="panel">
+
+        <h2>Live System Metrics</h2>
+
+        <canvas id="metricsChart"></canvas>
+
+      </div>
+
+      <!-- EVENTS -->
+
+      <div class="panel">
+
+        <h2>Live Event Stream</h2>
+
+        <div class="events"
+             id="events-container">
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- GRAFANA -->
+
+    <div class="panel">
+
+      <h2>Grafana Monitoring</h2>
+
+      <iframe
+        src="http://localhost:3001">
+      </iframe>
+
+    </div>
+
+    <footer>
+      Centralized Intelligent Self-Healing Framework for Distributed Microservices
+    </footer>
+
+  </div>
+
+  <script>
+
+    const socket = io(
+      "http://localhost:4006"
+    );
+
+    let recoveryCount = 0;
+
+    /* CHART */
+
+    const ctx = document
+      .getElementById("metricsChart");
+
+    const metricsChart = new Chart(ctx, {
+
+      type: "line",
+
+      data: {
+
+        labels: [],
+
+        datasets: [
+
+          {
+            label: "CPU %",
+            data: [],
+            borderColor: "#3b82f6",
+            tension: 0.4
+          },
+
+          {
+            label: "Memory %",
+            data: [],
+            borderColor: "#a855f7",
+            tension: 0.4
+          }
+        ]
+      },
+
+      options: {
+
+        responsive: true,
+
+        plugins: {
+          legend: {
+            labels: {
+              color: "white"
+            }
+          }
+        },
+
+        scales: {
+
+          y: {
+            min: 0,
+            max: 100,
+            ticks: {
+              color: "white"
+            }
+          },
+
+          x: {
+            ticks: {
+              color: "white"
+            }
+          }
+        }
+      }
+    });
+
+    /* LOAD SERVICES */
+
+    async function loadServices() {
+
+      try {
+
+        const res = await fetch(
+          "http://localhost:4006/dashboard/services"
+        );
+
+        const services = await res.json();
+
+        const container =
+          document.getElementById(
+            "services-container"
+          );
+
+        container.innerHTML = "";
+
+        let activeCount = 0;
+
+        services.forEach(service => {
+
+          if(service.status === "UP") {
+            activeCount++;
+          }
+
+          let statusClass = "recovering";
+
+          if(service.status === "UP") {
+            statusClass = "up";
+          }
+
+          if(service.status === "DOWN") {
+            statusClass = "down";
+          }
+
+          /* TOPOLOGY */
+
+          const node =
+            document.getElementById(
+              `${service.id}-node`
+            );
+
+          if(node) {
+
+            node.classList.remove(
+              "up",
+              "down",
+              "recovering"
+            );
+
+            node.classList.add(
+              statusClass
+            );
+          }
+
+          container.innerHTML += `
+
+          <div class="service-card">
+
+            <div class="service-top">
+
+              <h3>${service.name}</h3>
+
+              <div class="badge ${statusClass}">
+                ${service.status}
+              </div>
+
+            </div>
+
+            <p>
+              Response Time:
+              ${service.response}
+            </p>
+
+            <p>
+              Recovery State:
+              ${service.recovery}
+            </p>
+
+            <div class="metric">
+
+              <p>
+                CPU Usage:
+                ${service.cpu}%
+              </p>
+
+              <div class="progress">
+                <div
+                  class="progress-bar cpu"
+                  style="width:${service.cpu}%">
+                </div>
+              </div>
+
+            </div>
+
+            <div class="metric">
+
+              <p>
+                Memory Usage:
+                ${service.memory}%
+              </p>
+
+              <div class="progress">
+                <div
+                  class="progress-bar memory"
+                  style="width:${service.memory}%">
+                </div>
+              </div>
+
+            </div>
+
+            <button
+              onclick="simulateOutage('${service.id}')">
+
+              Simulate Outage
+
+            </button>
+
+          </div>
+          `;
+        });
+
+        document.getElementById(
+          "active-services"
+        ).innerText =
+        `${activeCount}/${services.length}`;
+
+        /* CHART UPDATE */
+
+        const avgCpu =
+          services.reduce(
+            (sum, s) => sum + s.cpu,
+            0
+          ) / services.length;
+
+        const avgMemory =
+          services.reduce(
+            (sum, s) => sum + s.memory,
+            0
+          ) / services.length;
+
+        const time =
+          new Date().toLocaleTimeString();
+
+        metricsChart.data.labels.push(time);
+
+        metricsChart.data.datasets[0]
+        .data.push(avgCpu);
+
+        metricsChart.data.datasets[1]
+        .data.push(avgMemory);
+
+        if(metricsChart.data.labels.length > 10) {
+
+          metricsChart.data.labels.shift();
+
+          metricsChart.data.datasets[0]
+          .data.shift();
+
+          metricsChart.data.datasets[1]
+          .data.shift();
+        }
+
+        metricsChart.update();
+
+      } catch(err) {
+
+        console.log(err);
+
+      }
+    }
+
+    /* INCIDENT */
+
+    async function loadIncident() {
+
+      try {
+
+        const res = await fetch(
+          "http://localhost:4006/dashboard/incident"
+        );
+
+        const incident = await res.json();
+
+        const box = document
+          .getElementById("incident-box");
+
+        if(!incident.active) {
+
+          box.innerHTML = `
+            <p>No active incidents</p>
+          `;
+
+          return;
+        }
+
+        box.innerHTML = `
+
+        <p>
+          <strong>Service:</strong>
+          ${incident.service}
+        </p>
+
+        <div class="incident-stage">
+          ${incident.stage}
+        </div>
+
+        <p style="margin-top:15px;">
+          <strong>Detected:</strong>
+          ${incident.time}
+        </p>
+
+        `;
+
+      } catch(err) {
+
+        console.log(err);
+
+      }
+    }
+
+    /* LIVE EVENTS */
+
+    socket.on("new-event", (log) => {
+
+      const container =
+        document.getElementById(
+          "events-container"
+        );
+
+      container.innerHTML = `
+
+      <div class="event">
+        [${log.time}] ${log.message}
+      </div>
+
+      ` + container.innerHTML;
+
+      if(log.stage === "Restored") {
+
+        recoveryCount++;
+
+        document.getElementById(
+          "recovery-count"
+        ).innerText = recoveryCount;
+      }
+    });
+
+    /* OUTAGE SIMULATION */
+
+    async function simulateOutage(service) {
+
+      try {
+
+        await fetch(
+          `http://localhost:4006/dashboard/outage/${service}`,
+          {
+            method: "POST"
+          }
+        );
+
+      } catch(err) {
+
+        console.log(err);
+
+      }
+    }
+
+    /* AUTO REFRESH */
+
+    loadServices();
+    loadIncident();
+
+    setInterval(loadServices, 5000);
+    setInterval(loadIncident, 2000);
+
+  </script>
+
+</body>
+</html>

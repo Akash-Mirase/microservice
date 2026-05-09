@@ -3,10 +3,9 @@ FROM node:18
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
 
-RUN apt-get update && apt-get install -y docker.io
+RUN npm install
 
 COPY . .
 
-CMD ["node", "api-gateway.js"]
+CMD ["node", "gateway/api-gateway.js"]

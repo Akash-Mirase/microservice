@@ -2,10 +2,12 @@ const express = require('express')
 const dotenv = require('dotenv')
 const { Kafka } = require('kafkajs')
 const client = require('prom-client')
+const cors = require("cors");
 
 dotenv.config()
 
 const app = express()
+app.use(cors());
 app.use(express.json())
 
 client.collectDefaultMetrics()

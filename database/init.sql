@@ -28,3 +28,10 @@ CREATE TABLE IF NOT EXISTS orders(
  status TEXT,
  created_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS incident_logs (
+  id SERIAL PRIMARY KEY,
+  service_name TEXT,
+  stage TEXT,
+  timestamp TIMESTAMP
+);;

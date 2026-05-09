@@ -4,10 +4,12 @@ const jwt = require('jsonwebtoken')
 const Joi = require('joi')
 const dotenv = require('dotenv')
 const { Pool } = require('pg')
+const cors = require('cors')
 
 dotenv.config()
 
 const app = express()
+app.use(cors())
 app.use(express.json())
 
 /*  DATABASE  */
@@ -140,6 +142,18 @@ app.post('/login', async (req, res) => {
     })
   }
 })
+
+app.get('/stress', (req, res) => {
+
+  const end =
+    Date.now() + 15000;
+
+  while (Date.now() < end) {
+    Math.sqrt(Math.random());
+  }
+
+  res.send('CPU stress completed');
+});
 
 /*  SERVER  */
 

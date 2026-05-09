@@ -13,8 +13,12 @@ model = IsolationForest(n_estimators=100, contamination=0.1, random_state=42)
 def predict():
     try:
         data = request.json
-        if not data or not isinstance(data, list):
-            return jsonify({"error": "Invalid input, expected list of metrics"}), 400
+        print(data, flush=True)
+        if not data or not isinstance(data, dict):
+            print("INVALID DATA:", data, flush=True)
+            return jsonify({
+                "error": "Invalid JSON"
+                }), 400
         
         if len(data) < 10:
             return jsonify({"status": "NORMAL", "reason": "Not enough data"}), 200
@@ -35,6 +39,7 @@ def predict():
         # Predict on the most recent data point (last element in array)
         latest_point = X.iloc[[-1]]
         prediction = model.predict(latest_point)
+
         
         # -1 means anomaly, 1 means normal
         if prediction[0] == -1:
