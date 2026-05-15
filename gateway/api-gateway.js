@@ -6,6 +6,7 @@ const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const jwt = require("jsonwebtoken");
 const { createProxyMiddleware } = require("http-proxy-middleware");
+const logger = require('../shared/logger')('auth-service')
 
 dotenv.config();
 

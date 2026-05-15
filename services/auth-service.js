@@ -3,24 +3,24 @@ const bcrypt = require('bcrypt')
 const jwt = require('jsonwebtoken')
 const Joi = require('joi')
 const dotenv = require('dotenv')
-const { Pool } = require('pg')
 const cors = require('cors')
+const logger = require('../shared/logger')('auth-service')
+const pool = require('../shared/db')
+
+let requestCount = 0
+let errorCount = 0
 
 dotenv.config()
 
 const app = express()
 app.use(cors())
-app.use(express.json())
 
-/*  DATABASE  */
+app.use((req, res, next) => {
+  requestCount++
 
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.DB_NAME
+  next()
 })
+app.use(express.json())
 
 /*  VALIDATION  */
 
@@ -38,11 +38,22 @@ const loginSchema = Joi.object({
 /*  ROUTES  */
 
 /* Health Check */
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    service: 'auth-service',
-    status: 'UP'
-  })
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1')
+
+    res.json({
+      service: 'auth-service',
+      status: 'UP'
+    })
+  } catch (err) {
+    errorCount++
+
+    res.status(500).json({
+      status: 'DOWN',
+      error: err.message
+    })
+  }
 })
 
 /* Register */
@@ -80,7 +91,10 @@ app.post('/register', async (req, res) => {
       message: 'User registered successfully'
     })
   } catch (err) {
-    console.error(err)
+    errorCount++
+    logger.error('Database error', {
+      error: err.message
+    })
 
     res.status(500).json({
       error: 'Internal server error'
@@ -135,7 +149,10 @@ app.post('/login', async (req, res) => {
       token
     })
   } catch (err) {
-    console.error(err)
+    errorCount++
+    logger.error('Database error', {
+      error: err.message
+    })
 
     res.status(500).json({
       error: 'Internal server error'
@@ -143,27 +160,56 @@ app.post('/login', async (req, res) => {
   }
 })
 
-app.get('/stress', (req, res) => {
+app.get('/stress', async (req, res) => {
+  const duration = 15000
 
-  const end =
-    Date.now() + 15000;
+  const start = Date.now()
 
-  while (Date.now() < end) {
-    Math.sqrt(Math.random());
+  while (Date.now() - start < duration) {
+    for (let i = 0; i < 100000; i++) {
+      Math.sqrt(Math.random())
+    }
+
+    await new Promise(resolve => setImmediate(resolve))
   }
 
-  res.send('CPU stress completed');
-});
+  res.send('CPU stress completed')
+})
 
 /*  SERVER  */
 
 const PORT = process.env.AUTH_PORT || 4001
 const client = require('prom-client')
-client.collectDefaultMetrics()
+client.collectDefaultMetrics({
+  prefix: 'auth_service_'
+})
 
 app.get('/metrics', async (req, res) => {
   res.set('Content-Type', client.register.contentType)
   res.end(await client.register.metrics())
+})
+app.get('/stats', (req, res) => {
+  res.json({
+    requestCount,
+
+    errorCount
+  })
+})
+pool
+  .query('SELECT 1')
+  .then(() => {
+    console.log('Database connected')
+  })
+  .catch(err => {
+    console.error('Database connection failed:', err.message)
+  })
+
+process.on('SIGTERM', async () => {
+  console.log('Shutting down auth-service...')
+
+  await pool.end()
+
+  process.exit(0)
 })
 
 app.listen(PORT, () => {

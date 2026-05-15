@@ -20,6 +20,7 @@ services:
     networks:
       - selfhealing-network
 
+
   # ---------------- REDIS ---------------- #
 
   redis:
@@ -82,6 +83,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - selfhealing-network
     restart: always
@@ -94,6 +102,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - selfhealing-network
     restart: always
@@ -110,6 +125,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - selfhealing-network
     restart: always
@@ -119,6 +141,13 @@ services:
     command: node services/payment-service.js
     ports:
       - "4004:4004"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    env_file:
+      - .env
     networks:
       - selfhealing-network
     restart: always
@@ -131,6 +160,13 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - selfhealing-network
     restart: always
@@ -144,6 +180,13 @@ services:
       - auth-service
       - user-service
       - order-service
+    env_file:
+       - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - selfhealing-network
     restart: always
@@ -162,26 +205,47 @@ services:
       - payment-service
       - notification-service
       - ml-service
+    env_file:
+        - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - selfhealing-network
     restart: always
 
   ml-service:
-    build:
-      context: .
-      dockerfile: ml-service/Dockerfile.ml
-    command: python ml-service/app.py
-    ports:
-      - "5000:5000"
-    networks:
-      - selfhealing-network
-    restart: always
+     build:
+       context: .
+       dockerfile: ml-service/Dockerfile.ml
+     command: python app.py
+     working_dir: /app/ml-service
+     ports:
+       - "5000:5000"
+     env_file:
+       - .env
+     healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/health"]
+      interval: 10s
+      timeout: 5s 
+      retries: 5
+     networks:
+       - selfhealing-network
+     restart: on-failure:5
+     
 
   traffic-generator:
     build: .
     command: node services/traffic-generator.js
     depends_on:
       - order-service
+    healthcheck:
+     test: ["CMD", "curl", "-f", "http://localhost:4001/health"]
+     interval: 10s
+     timeout: 5s
+     retries: 5
     networks:
       - selfhealing-network
 

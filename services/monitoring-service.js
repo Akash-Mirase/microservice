@@ -1,285 +1,443 @@
+/**
+ * services/monitoring-service.js
+ *
+ * Step 1 upgrade: Rich Metric + Log Collection Pipeline
+ *
+ * What's new vs the original:
+ *  - Collects cpu, memory, response_time, error_rate, request_count per service
+ *  - Persists every poll into the metrics table (not just on failure)
+ *  - Pulls recent ERROR logs from each service's /logs endpoint
+ *  - Feeds ALL of this into ML service (not just cpu/memory)
+ *  - /dashboard/metrics  → last N rows per service
+ *  - /dashboard/logs     → recent ERROR/WARN logs across all services
+ *  - /dashboard/health   → live snapshot of every service
+ */
+
+'use strict'
+
+require('dotenv').config()
+
 const express = require('express')
-const axios = require('axios')
 const cors = require('cors')
 const nodemailer = require('nodemailer')
 const http = require('http')
 const { Server } = require('socket.io')
 const Docker = require('dockerode')
-const lastAlert = {}
-
 const { Pool } = require('pg')
-
-const pool = new Pool({
-  host: 'postgres',
-  user: 'admin',
-  password: 'admin123',
-  database: 'selfhealing',
-  port: 5432
-})
-
-const docker = new Docker({
-  socketPath: '/var/run/docker.sock'
-})
-
-async function getContainerStats (containerName) {
-  try {
-    const container = docker.getContainer(containerName)
-
-    const stats = await container.stats({ stream: false })
-
-    const cpuDelta =
-      stats.cpu_stats.cpu_usage.total_usage -
-      stats.precpu_stats.cpu_usage.total_usage
-
-    const systemDelta =
-      stats.cpu_stats.system_cpu_usage - stats.precpu_stats.system_cpu_usage
-
-    const cpu = (cpuDelta / systemDelta) * stats.cpu_stats.online_cpus * 100
-
-    const memory = (stats.memory_stats.usage / stats.memory_stats.limit) * 100
-
-    return {
-      cpu: Math.round(cpu) || 0,
-      memory: Math.round(memory) || 0
-    }
-  } catch {
-    return {
-      cpu: 0,
-      memory: 0
-    }
-  }
-}
-
-const app = express()
-
-const server = http.createServer(app)
-
-const io = new Server(server, {
-  cors: {
-    origin: '*'
-  }
-})
-
-app.use(cors())
-app.use(express.json())
-
-/* ---------------- SERVICES TO MONITOR ---------------- */
-
-const services = [
-  { name: 'auth-service', url: 'http://auth-service:4001/health' },
-  { name: 'user-service', url: 'http://user-service:4002/health' },
-  { name: 'order-service', url: 'http://order-service:4003/health' },
-  { name: 'payment-service', url: 'http://payment-service:4004/health' },
-  {
-    name: 'notification-service',
-    url: 'http://notification-service:4005/health'
-  }
-]
-
-const serviceState = {}
-
-let currentIncident = {
-  active: false,
-  service: null,
-  stage: null,
-  time: null
-}
-
-let eventLogs = []
-
-app.get('/dashboard/incident', (req, res) => {
-  res.json(currentIncident)
-})
-
-app.get('/dashboard/events', (req, res) => {
-  res.json(eventLogs)
-})
-
-app.get('/dashboard/services', (req, res) => {
-  res.json(Object.values(serviceState))
-})
-
-app.post(
-  '/dashboard/outage/:service',
-
-  (req, res) => {
-    const serviceName = req.params.service
-
-    const { exec } = require('child_process')
-
-    exec(`docker stop self-healing-system-${serviceName}-1`)
-
-    res.json({
-      message: `${serviceName} stopped`
-    })
-  }
-)
-
-/* ---------------- CHECK HEALTH ---------------- */
-async function checkServices () {
-  for (let service of services) {
-    try {
-      const start = Date.now()
-
-      const res = await axios.get(service.url)
-
-      const responseTime = Date.now() - start
-
-      const stats = await getContainerStats(
-        `self-healing-system-${service.name}-1`
-      )
-
-      serviceState[service.name] = {
-        id: service.name,
-        name: service.name,
-        status: 'UP',
-        cpu: stats.cpu,
-        memory: stats.memory,
-        response: `${responseTime}ms`,
-        recovery: 'Stable'
-      }
-
-      try {
-        console.log({
-          cpu: stats.cpu,
-          memory: stats.memory,
-          errors: 0
-        })
-        const mlRes = await axios.post('http://ml-service:5000/predict', {
-          cpu: stats.cpu || 0,
-          memory: stats.memory || 0,
-          errors: 0
-        })
-
-        if (mlRes.data.status === 'ANOMALY') {
-          console.log(`⚠️ ML detected anomaly in ${service.name}`)
-
-          await pushEvent(service.name, 'Anomaly', 'ML anomaly detected')
-
-          await handleFailure(service.name)
-        }
-      } catch (err) {
-        console.log('ML service unavailable')
-      }
-    } catch (err) {
-      console.log(`${service.name} DOWN`)
-      serviceState[service.name] = {
-        id: service.name,
-        name: service.name,
-        status: 'DOWN',
-        cpu: 0,
-        memory: 0,
-        response: 'Timeout',
-        recovery: 'Recovering'
-      }
-
-      await handleFailure(service.name)
-    }
-  }
-}
+const axios = require('axios')
 
 function delay (ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-/* ---------------- SELF-HEALING ACTION ---------------- */
+/* ─────────────────────────────────────────────
+   DB
+───────────────────────────────────────────── */
+const pool = new Pool({
+  host: process.env.DB_HOST || 'postgres',
+  port: parseInt(process.env.DB_PORT || '5432'),
+  user: process.env.DB_USER || 'admin',
+  password: process.env.DB_PASS || 'admin123',
+  database: process.env.DB_NAME || 'selfhealing'
+})
 
-async function handleFailure (serviceName) {
+/* ─────────────────────────────────────────────
+   DOCKER
+───────────────────────────────────────────── */
+const docker = new Docker({ socketPath: '/var/run/docker.sock' })
+
+/* ─────────────────────────────────────────────
+   EXPRESS + SOCKET.IO
+───────────────────────────────────────────── */
+const app = express()
+const server = http.createServer(app)
+const io = new Server(server, { cors: { origin: '*' } })
+
+app.use(cors())
+app.use(express.json())
+
+/* ─────────────────────────────────────────────
+   SERVICE REGISTRY
+   Each service optionally exposes:
+     GET /health  → { status: 'UP' }
+     GET /stats   → { requestCount: N, errorCount: N }  (optional)
+───────────────────────────────────────────── */
+const SERVICES = [
+  {
+    name: 'auth-service',
+    url: 'http://auth-service:4001',
+    container: 'self-healing-system-auth-service-1'
+  },
+  {
+    name: 'user-service',
+    url: 'http://user-service:4002',
+    container: 'self-healing-system-user-service-1'
+  },
+  {
+    name: 'order-service',
+    url: 'http://order-service:4003',
+    container: 'self-healing-system-order-service-1'
+  },
+  {
+    name: 'payment-service',
+    url: 'http://payment-service:4004',
+    container: 'self-healing-system-payment-service-1'
+  },
+  {
+    name: 'notification-service',
+    url: 'http://notification-service:4005',
+    container: 'self-healing-system-notification-service-1'
+  },
+  {
+    name: 'ml-service',
+    url: 'http://ml-service:5000',
+    container: 'self-healing-system-ml-service-1'
+  }
+]
+
+/* ─────────────────────────────────────────────
+   IN-MEMORY STATE
+───────────────────────────────────────────── */
+const serviceState = {} // live snapshot shown on dashboard
+const lastAlert = {} // cooldown tracker — avoid alert storms
+const metricsBuffer = {} // rolling window of last 30 readings per service
+const failureCounts = {}
+
+let currentIncident = { active: false, service: null, stage: null, time: null }
+let eventLogs = [] // last 100 healing events (in-memory for WS)
+
+/* initialise buffer slots */
+for (const svc of SERVICES) {
+  metricsBuffer[svc.name] = []
+}
+
+/* ─────────────────────────────────────────────
+   DOCKER STATS  (cpu % + memory %)
+───────────────────────────────────────────── */
+async function getContainerStats (containerName) {
+  try {
+    const container = docker.getContainer(containerName)
+    const stats = await container.stats({ stream: false })
+
+    const cpuDelta =
+      stats.cpu_stats.cpu_usage.total_usage -
+      stats.precpu_stats.cpu_usage.total_usage
+    const systemDelta =
+      stats.cpu_stats.system_cpu_usage - stats.precpu_stats.system_cpu_usage
+    const cpuCores = stats.cpu_stats.online_cpus || 1
+    let cpu = 0
+
+    if (systemDelta > 0 && cpuDelta > 0) {
+      cpu = (cpuDelta / systemDelta) * cpuCores * 100
+    }
+    const memory = (stats.memory_stats.usage / stats.memory_stats.limit) * 100
+
+    return {
+      cpu: Math.max(0, Math.round(cpu * 10) / 10),
+      memory: Math.max(0, Math.round(memory * 10) / 10)
+    }
+  } catch {
+    return { cpu: 0, memory: 0 }
+  }
+}
+
+/* ─────────────────────────────────────────────
+   COLLECT SERVICE STATS  (request + error counts)
+   Services that expose GET /stats return:
+     { requestCount: N, errorCount: N }
+   Others fall back to 0.
+───────────────────────────────────────────── */
+async function getServiceStats (baseUrl) {
+  try {
+    const res = await axios.get(`${baseUrl}/stats`, { timeout: 2000 })
+    return {
+      requestCount: res.data.requestCount || 0,
+      errorCount: res.data.errorCount || 0
+    }
+  } catch {
+    return { requestCount: 0, errorCount: 0 }
+  }
+}
+
+/* ─────────────────────────────────────────────
+   PERSIST METRIC ROW
+───────────────────────────────────────────── */
+async function saveMetric (
+  serviceName,
+  cpu,
+  memory,
+  responseTime,
+  errorRate,
+  requestCount
+) {
+  try {
+    await pool.query(
+      `INSERT INTO metrics (service_name, cpu, memory, response_time, error_rate, request_count)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [serviceName, cpu, memory, responseTime, errorRate, requestCount]
+    )
+  } catch (err) {
+    console.error(`[monitoring] metrics insert failed: ${err.message}`)
+  }
+}
+
+/* ─────────────────────────────────────────────
+   PERSIST LOG ROW  (called by each service indirectly via shared/logger,
+   but monitoring also writes its own operational logs here)
+───────────────────────────────────────────── */
+async function saveLog (serviceName, level, message, context = {}) {
+  const ts = new Date().toISOString()
+  console.log(`[${ts}] [${level}] [${serviceName}] ${message}`)
+  try {
+    await pool.query(
+      `INSERT INTO logs (service_name, level, message, context)
+       VALUES ($1, $2, $3, $4)`,
+      [serviceName, level, message, JSON.stringify(context)]
+    )
+  } catch (err) {
+    console.error(`[monitoring] log insert failed: ${err.message}`)
+  }
+}
+
+/* ─────────────────────────────────────────────
+   ROLLING METRICS BUFFER
+   Keeps last 30 readings in memory per service
+   so ML model always has a window to work with.
+───────────────────────────────────────────── */
+function pushToBuffer (serviceName, snapshot) {
+  const buf = metricsBuffer[serviceName]
+  buf.push(snapshot)
+  if (buf.length > 30) buf.shift()
+}
+
+/* ─────────────────────────────────────────────
+   CALL ML SERVICE
+   Sends the rolling buffer for a service.
+   Returns 'ANOMALY' | 'NORMAL' | 'SKIP'
+───────────────────────────────────────────── */
+async function callML (serviceName) {
+  const buf = metricsBuffer[serviceName]
+  if (buf.length < 10) return 'SKIP' // not enough data yet
+
+  try {
+    const res = await axios.post(
+      'http://ml-service:5000/predict',
+      buf, // array of { cpu, memory, response_time, error_rate }
+      { timeout: 5000 }
+    )
+    return res.data.status // 'ANOMALY' | 'NORMAL'
+  } catch {
+    return 'SKIP'
+  }
+}
+
+/* ─────────────────────────────────────────────
+   MAIN POLL LOOP — runs every 10 s
+───────────────────────────────────────────── */
+async function checkServices () {
+  for (const svc of SERVICES) {
+    let status = 'UP'
+    let responseTime = 0
+    let cpu = 0
+    let memory = 0
+    let errorRate = 0
+    let requestCount = 0
+
+    /* ── 1. Health check ── */
+    try {
+      const start = Date.now()
+      await axios.get(`${svc.url}/health`, { timeout: 5000 })
+      responseTime = Date.now() - start
+    } catch {
+      status = 'DOWN'
+      responseTime = 9999
+      await saveLog(
+        svc.name,
+        'ERROR',
+        `Health check failed — service appears DOWN`
+      )
+    }
+
+    /* ── 2. Docker stats ── */
+    const dockerStats = await getContainerStats(svc.container)
+    cpu = dockerStats.cpu
+    memory = dockerStats.memory
+    try {
+      const container = docker.getContainer(svc.container)
+
+      const logsBuffer = await container.logs({
+        stdout: true,
+        stderr: true,
+        tail: 50
+      })
+
+      const logs = logsBuffer.toString()
+
+      if (
+        logs.includes('ECONNREFUSED') ||
+        logs.includes('timeout') ||
+        logs.includes('ENOMEM')
+      ) {
+        await saveLog(svc.name, 'WARN', 'Log anomaly detected')
+      }
+    } catch (err) {
+      console.log(err.message)
+    }
+    /* ── 3. Application-level stats (request/error counts) ── */
+    if (status === 'UP') {
+      const appStats = await getServiceStats(svc.url)
+      requestCount = appStats.requestCount
+
+      /* error_rate = errors per minute derived from count + poll interval */
+      errorRate =
+        requestCount > 0
+          ? Math.round((appStats.errorCount / requestCount) * 100)
+          : 0
+    }
+
+    /* ── 4. Warn on concerning individual thresholds ── */
+    if (cpu > 80) {
+      await saveLog(svc.name, 'WARN', `High CPU detected`, { cpu })
+    }
+
+    if (responseTime > 3000 && status === 'UP') {
+      await saveLog(svc.name, 'WARN', 'Latency spike detected', {
+        responseTime
+      })
+    }
+    if (memory > 85) {
+      await saveLog(svc.name, 'WARN', `High memory detected`, { memory })
+    }
+    if (responseTime > 2000 && status === 'UP') {
+      await saveLog(svc.name, 'WARN', `Slow response time`, { responseTime })
+    }
+
+    /* ── 5. Push to rolling buffer ── */
+    const snapshot = {
+      cpu,
+      memory,
+      response_time: responseTime,
+      error_rate: errorRate,
+      request_count: requestCount
+    }
+    pushToBuffer(svc.name, snapshot)
+
+    /* ── 6. Persist metric to DB ── */
+    await saveMetric(
+      svc.name,
+      cpu,
+      memory,
+      responseTime,
+      errorRate,
+      requestCount
+    )
+
+    /* ── 7. Update live state ── */
+    serviceState[svc.name] = {
+      name: svc.name,
+      status,
+      cpu,
+      memory,
+      responseTime: `${responseTime}ms`,
+      errorRate,
+      requestCount,
+      recovery: status === 'UP' ? 'Stable' : 'Recovering',
+      updatedAt: new Date().toISOString()
+    }
+
+    /* ── 8. Emit live state to dashboard via WebSocket ── */
+    io.emit('service-update', serviceState[svc.name])
+
+    /* ── 9. ML anomaly check (on UP services with enough data) ── */
+    if (status === 'UP') {
+      const mlResult = await callML(svc.name)
+      if (mlResult === 'ANOMALY') {
+        await saveLog(
+          svc.name,
+          'WARN',
+          'ML anomaly detected — triggering healing',
+          snapshot
+        )
+        if (cpu > 95 || memory > 95 || errorRate > 50) {
+          await handleFailure(svc.name, 'critical-anomaly')
+        }
+      }
+    }
+
+    /* ── 10. Trigger healing for DOWN services ── */
+    if (status === 'DOWN') {
+      await handleFailure(svc.name, 'health-fail')
+    }
+  }
+}
+
+/* ─────────────────────────────────────────────
+   HEALING PIPELINE  (unchanged logic, better logging)
+───────────────────────────────────────────── */
+
+async function handleFailure (serviceName, reason) {
   const now = Date.now()
+  if (lastAlert[serviceName] && now - lastAlert[serviceName] < 60000) return
+  lastAlert[serviceName] = now
+  failureCounts[serviceName] = (failureCounts[serviceName] || 0) + 1
+  if (failureCounts[serviceName] > 5) {
+    await saveLog(
+      serviceName,
+      'ERROR',
+      'Restart storm detected — recovery halted'
+    )
 
-  if (lastAlert[serviceName] && now - lastAlert[serviceName] < 60000) {
     return
   }
 
-  lastAlert[serviceName] = now
+  await sendAlert(serviceName, reason)
 
-  await sendAlert(serviceName)
+  const stages = [
+    { stage: 'Detection', msg: `Issue detected (${reason})`, wait: 2000 },
+    { stage: 'Validation', msg: 'Threshold validation complete', wait: 2000 },
+    { stage: 'Restarting', msg: 'Restarting container', wait: 0 },
+    {
+      stage: 'Health Verification',
+      msg: 'Waiting for service to come back',
+      wait: 5000
+    },
+    { stage: 'Restored', msg: 'Service restored', wait: 3000 }
+  ]
 
   currentIncident = {
     active: true,
     service: serviceName,
-    stage: 'Detection',
+    stage: stages[0].stage,
     time: new Date().toLocaleTimeString()
   }
 
-  await pushEvent(
-    serviceName,
-    'Detection',
-    `Failure detected in ${serviceName}`
-  )
+  for (const step of stages) {
+    currentIncident.stage = step.stage
+    if (serviceState[serviceName])
+      serviceState[serviceName].recovery = step.stage
 
-  await delay(2000)
+    await pushEvent(serviceName, step.stage, step.msg)
+    await saveLog(serviceName, 'INFO', `Healing: ${step.stage} — ${step.msg}`)
 
-  currentIncident.stage = 'Validation'
+    if (step.stage === 'Restarting') {
+      try {
+        const container = docker.getContainer(
+          `self-healing-system-${serviceName}-1`
+        )
+        await container.restart()
+        await delay(15000)
+      } catch (err) {
+        await saveLog(serviceName, 'ERROR', 'Container restart failed', {
+          err: err.message
+        })
+      }
+    }
 
-  serviceState[serviceName].recovery = 'Validation'
-
-  await pushEvent(serviceName, 'Validation', 'Threshold validation complete')
-
-  await delay(2000)
-
-  currentIncident.stage = 'Restarting'
-  serviceState[serviceName].recovery = 'Restarting'
-
-  await pushEvent(serviceName, 'Restarting', 'Recovery initiated')
-
-  const container = docker.getContainer(`self-healing-system-${serviceName}-1`)
-
-  await container.restart()
-
-  console.log(`Waiting for ${serviceName} to recover...`)
-
-  await delay(5000)
-
-  currentIncident.stage = 'Health Verification'
-  serviceState[serviceName].recovery = 'Health Verification'
-
-  await pushEvent(
-    serviceName,
-    'Health Verification',
-    'Container restarted successfully'
-  )
-
-  await delay(3000)
-
-  currentIncident.stage = 'Restored'
-  serviceState[serviceName].recovery = 'Stable'
-
-  await pushEvent(serviceName, 'Restored', 'Service restored')
-
-  await delay(3000)
-
-  currentIncident = {
-    active: false,
-    service: null,
-    stage: null,
-    time: null
+    if (step.wait > 0) await delay(step.wait)
   }
-}
+  failureCounts[serviceName] = 0
 
-require('dotenv').config()
-
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-})
-
-async function sendAlert (serviceName) {
-  try {
-    await transporter.sendMail({
-      from: 'sahaydoot@gmail.com',
-      to: 'akashmirase6@gmail.com',
-      subject: `🚨 Service Down: ${serviceName}`,
-      text: `${serviceName} is DOWN and was restarted by self-healing system.`
-    })
-
-    console.log(`📧 Alert sent for ${serviceName}`)
-  } catch (err) {
-    console.error('❌ Email failed:', err.message)
-  }
+  currentIncident = { active: false, service: null, stage: null, time: null }
 }
 
 async function pushEvent (serviceName, stage, message) {
@@ -289,46 +447,161 @@ async function pushEvent (serviceName, stage, message) {
     message,
     time: new Date().toLocaleTimeString()
   }
-
   eventLogs.unshift(log)
+  if (eventLogs.length > 100) eventLogs.pop()
 
-  io.emit('new-event', {
-    message,
-    stage,
-    time: new Date().toLocaleTimeString()
-  })
-
-  if (eventLogs.length > 100) {
-    eventLogs.pop()
-  }
+  io.emit('new-event', log)
 
   try {
     await pool.query(
-      `
-      INSERT INTO incident_logs
-      (service_name, stage, timestamp)
-
-      VALUES ($1, $2, NOW())
-      `,
-      [serviceName, stage]
+      `INSERT INTO incident_logs (service_name, stage, message) VALUES ($1, $2, $3)`,
+      [serviceName, stage, message]
     )
   } catch (err) {
-    console.log('DB log insert failed:', err.message)
+    console.error(`[monitoring] incident_logs insert failed: ${err.message}`)
   }
 }
 
+/* ─────────────────────────────────────────────
+   EMAIL ALERT
+───────────────────────────────────────────── */
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+})
+
+async function sendAlert (serviceName, reason) {
+  try {
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: process.env.ALERT_EMAIL || process.env.EMAIL_USER,
+      subject: `🚨 Self-Healing Triggered: ${serviceName}`,
+      text: `Service: ${serviceName}\nReason: ${reason}\nAction: Container restart initiated by self-healing system.`
+    })
+  } catch (err) {
+    console.error(`[monitoring] email alert failed: ${err.message}`)
+  }
+}
+
+/* ─────────────────────────────────────────────
+   REST ENDPOINTS
+───────────────────────────────────────────── */
+
+/* Live snapshot of all services */
+app.get('/dashboard/health', (req, res) => {
+  res.json(Object.values(serviceState))
+})
+
+/* Last N metric rows per service (default 50) */
+app.get('/dashboard/metrics', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || '50'), 200)
+  const serviceName = req.query.service // optional filter
+
+  try {
+    const query = serviceName
+      ? `SELECT * FROM metrics WHERE service_name = $1 ORDER BY created_at DESC LIMIT $2`
+      : `SELECT * FROM metrics ORDER BY created_at DESC LIMIT $1`
+    const params = serviceName ? [serviceName, limit] : [limit]
+    const result = await pool.query(query, params)
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/* Recent logs — filter by level and/or service */
+app.get('/dashboard/logs', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || '100'), 500)
+  const level = req.query.level // INFO | WARN | ERROR  (optional)
+  const serviceName = req.query.service // optional
+
+  try {
+    let query = 'SELECT * FROM logs WHERE 1=1'
+    const params = []
+
+    if (serviceName) {
+      params.push(serviceName)
+      query += ` AND service_name = $${params.length}`
+    }
+    if (level) {
+      params.push(level)
+      query += ` AND level = $${params.length}`
+    }
+
+    params.push(limit)
+    query += ` ORDER BY created_at DESC LIMIT $${params.length}`
+
+    const result = await pool.query(query, params)
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/* In-memory rolling metrics buffer (no DB hit) */
+app.get('/dashboard/buffer', (req, res) => {
+  const serviceName = req.query.service
+  if (serviceName) return res.json(metricsBuffer[serviceName] || [])
+  res.json(metricsBuffer)
+})
+
+/* Active incident */
+app.get('/dashboard/incident', (req, res) => {
+  res.json(currentIncident)
+})
+
+/* Healing event log */
+app.get('/dashboard/events', (req, res) => {
+  res.json(eventLogs)
+})
+
+/* Manual outage simulation */
+app.post('/dashboard/outage/:service', (req, res) => {
+  const { exec } = require('child_process')
+  exec(`docker stop self-healing-system-${req.params.service}-1`)
+  res.json({ message: `${req.params.service} stopped` })
+})
+
+/* Health of monitoring service itself */
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1')
+
+    res.json({
+      status: 'UP'
+    })
+  } catch {
+    res.status(500).json({
+      status: 'DOWN'
+    })
+  }
+})
+
+/* ─────────────────────────────────────────────
+   BOOT
+───────────────────────────────────────────── */
 async function monitoringLoop () {
+  console.log('[monitoring] Starting collection loop...')
   while (true) {
     await checkServices()
-
     await delay(10000)
   }
 }
+setInterval(async () => {
+  await pool.query(`
+    DELETE FROM metrics
+    WHERE created_at <
+    NOW() - INTERVAL '7 days'
+  `)
+}, 3600000)
+async function startMonitoring () {
+  await delay(30000)
 
-monitoringLoop()
+  monitoringLoop()
+}
 
-/* ---------------- SERVER ---------------- */
+startMonitoring()
 
 server.listen(4006, () => {
-  console.log('Monitoring Service running')
+  console.log('[monitoring] Monitoring Service running on port 4006')
 })

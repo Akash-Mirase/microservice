@@ -1,139 +1,157 @@
-const express = require("express");
-const dotenv = require("dotenv");
-const { Pool } = require("pg");
-const { createClient } = require("redis");
-const cors = require("cors");
+const express = require('express')
+const dotenv = require('dotenv')
+const { Pool } = require('pg')
+const { createClient } = require('redis')
+const cors = require('cors')
+const logger = require('../shared/logger')('auth-service')
+const pool = require('../shared/db')
 
 const redisClient = createClient({
-  url: "redis://redis:6379"
-});
+  url: 'redis://redis:6379'
+})
 
-redisClient.connect()
-  .then(() => console.log("✅ Redis Connected"))
-  .catch(err => console.log(err));
+redisClient
+  .connect()
+  .then(() => console.log('✅ Redis Connected'))
+  .catch(err => console.log(err))
 
-dotenv.config();
+dotenv.config()
+let requestCount = 0
+let errorCount = 0
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+dotenv.config()
 
-/* ---------------- DATABASE ---------------- */
+const app = express()
 
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.DB_NAME
-});
+app.use((req, res, next) => {
+  requestCount++
+
+  next()
+})
+app.use(express.json())
 
 /* ---------------- HEALTH ---------------- */
 
-app.get("/health", (req, res) => {
-  res.json({
-    service: "user-service",
-    status: "UP"
-  });
-});
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1')
+
+    res.json({
+      service: 'user-service',
+      status: 'UP'
+    })
+  } catch (err) {
+    errorCount++
+
+    res.status(500).json({
+      status: 'DOWN',
+      error: err.message
+    })
+  }
+})
 
 /* ---------------- GET PROFILE ---------------- */
 
-app.get("/profile", async (req, res) => {
+app.get('/profile', async (req, res) => {
   try {
-    const userId = req.headers["x-user-id"];
-    const cacheKey = `user:${userId}`;
+    const userId = req.headers['x-user-id']
+    const cacheKey = `user:${userId}`
 
-    const cachedUser =
-      await redisClient.get(cacheKey);
+    const cachedUser = await redisClient.get(cacheKey)
 
     if (cachedUser) {
-      return res.json(JSON.parse(cachedUser));
+      return res.json(JSON.parse(cachedUser))
     }
 
     const result = await pool.query(
-      "SELECT id,name,email FROM users WHERE id=$1",
+      'SELECT id,name,email FROM users WHERE id=$1',
       [userId]
-    );
+    )
 
     if (result.rows.length === 0) {
       return res.status(404).json({
-        error: "User not found"
-      });
+        error: 'User not found'
+      })
     }
 
-    await redisClient.set(
-      cacheKey,
-      JSON.stringify(result.rows[0]),
-      { EX: 60 }
-    );
+    await redisClient.set(cacheKey, JSON.stringify(result.rows[0]), { EX: 60 })
 
-    res.json(result.rows[0]);
-
+    res.json(result.rows[0])
   } catch (err) {
+    errorCount++
     res.status(500).json({
-      error: "Failed to fetch profile"
-    });
+      error: 'Failed to fetch profile'
+    })
   }
-});
+})
 
 /* ---------------- UPDATE PROFILE ---------------- */
 
-app.put("/profile", async (req, res) => {
+app.put('/profile', async (req, res) => {
   try {
-    const userId = req.headers["x-user-id"];
-    const { name } = req.body;
+    const userId = req.headers['x-user-id']
+    const { name } = req.body
 
     const result = await pool.query(
-      "UPDATE users SET name=$1 WHERE id=$2 RETURNING id,name,email",
+      'UPDATE users SET name=$1 WHERE id=$2 RETURNING id,name,email',
       [name, userId]
-    );
+    )
 
     res.json({
-      message: "Profile updated",
+      message: 'Profile updated',
       user: result.rows[0]
-    });
-
+    })
   } catch {
     res.status(500).json({
-      error: "Update failed"
-    });
+      error: 'Update failed'
+    })
   }
-});
+})
 
 /* ---------------- DELETE USER ---------------- */
 
-app.delete("/profile", async (req, res) => {
+app.delete('/profile', async (req, res) => {
   try {
-    const userId = req.headers["x-user-id"];
+    const userId = req.headers['x-user-id']
 
-    await pool.query(
-      "DELETE FROM users WHERE id=$1",
-      [userId]
-    );
+    await pool.query('DELETE FROM users WHERE id=$1', [userId])
 
     res.json({
-      message: "User deleted"
-    });
-
+      message: 'User deleted'
+    })
   } catch {
     res.status(500).json({
-      error: "Delete failed"
-    });
+      error: 'Delete failed'
+    })
   }
-});
+})
+
+app.get('/stats', (req, res) => {
+  res.json({
+    requestCount,
+    errorCount
+  })
+})
 
 /* ---------------- SERVER ---------------- */
 
-const PORT = process.env.USER_PORT || 4002;
-const client = require("prom-client");
-client.collectDefaultMetrics();
+const PORT = process.env.USER_PORT || 4002
+const client = require('prom-client')
+client.collectDefaultMetrics()
 
-app.get("/metrics", async (req, res) => {
-  res.set("Content-Type", client.register.contentType);
-  res.end(await client.register.metrics());
-});
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', client.register.contentType)
+  res.end(await client.register.metrics())
+})
+
+app.get('/stats', (req, res) => {
+  res.json({
+    requestCount,
+
+    errorCount
+  })
+})
 
 app.listen(PORT, () => {
-  console.log(`User Service running on port ${PORT}`);
-});
+  console.log(`User Service running on port ${PORT}`)
+})

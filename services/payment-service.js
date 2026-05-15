@@ -1,99 +1,122 @@
-const express = require("express");
-const dotenv = require("dotenv");
-const { randomUUID } = require("crypto");
-const cors = require("cors");
+const express = require('express')
+const dotenv = require('dotenv')
+const { randomUUID } = require('crypto')
+const cors = require('cors')
 
-dotenv.config();
+const logger = require('../shared/logger')('payment-service')
+const pool = require('../shared/db')
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+dotenv.config()
 
-/* ---------------- HEALTH ---------------- */
+const app = express()
 
-app.get("/health", (req, res) => {
+let requestCount = 0
+let errorCount = 0
+
+app.use(cors())
+app.use(express.json())
+
+app.use((req, res, next) => {
+  requestCount++
+
+  next()
+})
+
+app.get('/health', (req, res) => {
   res.json({
-    service: "payment-service",
-    status: "UP"
-  });
-});
+    service: 'payment-service',
+    status: 'UP'
+  })
+})
 
 /* ---------------- PROCESS PAYMENT ---------------- */
 
-app.post("/pay", async (req, res) => {
+app.post('/pay', async (req, res) => {
   try {
-    const { orderId, amount } = req.body;
+    const { orderId, amount } = req.body
 
     if (!orderId || !amount) {
       return res.status(400).json({
-        error: "orderId and amount required"
-      });
+        error: 'orderId and amount required'
+      })
     }
 
     /* Simulate payment success rate */
 
-    const success = Math.random() > 0.1;
+    const success = Math.random() > 0.1
 
     if (!success) {
       return res.status(400).json({
         success: false,
-        message: "Payment failed"
-      });
+        message: 'Payment failed'
+      })
     }
 
-    const transactionId = randomUUID();
+    const transactionId = randomUUID()
 
     res.status(200).json({
       success: true,
-      message: "Payment successful",
+      message: 'Payment successful',
       transactionId,
       orderId,
       amount
-    });
-
+    })
   } catch (err) {
+    errorCount++
     res.status(500).json({
-      error: "Payment processing failed"
-    });
+      error: 'Payment processing failed'
+    })
   }
-});
+})
 
 /* ---------------- REFUND ---------------- */
 
-app.post("/refund", (req, res) => {
+app.post('/refund', (req, res) => {
   try {
-    const { transactionId } = req.body;
+    const { transactionId } = req.body
 
     if (!transactionId) {
       return res.status(400).json({
-        error: "transactionId required"
-      });
+        error: 'transactionId required'
+      })
     }
 
     res.json({
       success: true,
-      message: "Refund initiated",
+      message: 'Refund initiated',
       transactionId
-    });
-
+    })
   } catch {
+    logger.error('Payment processing failed', {
+      error: err.message
+    })
     res.status(500).json({
-      error: "Refund failed"
-    });
+      error: 'Refund failed'
+    })
   }
-});
+})
 
 /* ---------------- SERVER ---------------- */
 
-const PORT = process.env.PAYMENT_PORT || 4004;
-const client = require("prom-client");
-client.collectDefaultMetrics();
+const PORT = process.env.PAYMENT_PORT || 4004
+const client = require('prom-client')
+client.collectDefaultMetrics({
+  prefix: 'payment_service_'
+})
 
-app.get("/metrics", async (req, res) => {
-  res.set("Content-Type", client.register.contentType);
-  res.end(await client.register.metrics());
-});
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', client.register.contentType)
+  res.end(await client.register.metrics())
+})
+
+app.get('/stats', (req, res) => {
+  res.json({
+    requestCount,
+
+    errorCount
+  })
+})
 
 app.listen(PORT, () => {
-  console.log(`Payment Service running on port ${PORT}`);
-});
+  console.log(`Payment Service running on port ${PORT}`)
+})

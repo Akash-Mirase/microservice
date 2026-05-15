@@ -1,0 +1,320 @@
+{
+  "info": {
+    "name": "Self-Healing Microservices Platform",
+    "description": "Complete API collection for the self-healing microservices system",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth Service",
+      "item": [
+        {
+          "name": "Register User",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {"raw": "http://localhost:4001/register", "protocol": "http", "host": ["localhost"], "port": ["4001"], "path": ["register"]},
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\": \"John Doe\", \"email\": \"john@example.com\", \"password\": \"password123\"}"
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {"raw": "http://localhost:4001/login", "protocol": "http", "host": ["localhost"], "port": ["4001"], "path": ["login"]},
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"john@example.com\", \"password\": \"password123\"}"
+            }
+          }
+        },
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4001/health", "protocol": "http", "host": ["localhost"], "port": ["4001"], "path": ["health"]}
+          }
+        },
+        {
+          "name": "Get Stats",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4001/stats", "protocol": "http", "host": ["localhost"], "port": ["4001"], "path": ["stats"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "User Service",
+      "item": [
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "x-user-id", "value": "1"}],
+            "url": {"raw": "http://localhost:4002/profile", "protocol": "http", "host": ["localhost"], "port": ["4002"], "path": ["profile"]}
+          }
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "x-user-id", "value": "1"}
+            ],
+            "url": {"raw": "http://localhost:4002/profile", "protocol": "http", "host": ["localhost"], "port": ["4002"], "path": ["profile"]},
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\": \"Jane Doe\"}"
+            }
+          }
+        },
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4002/health", "protocol": "http", "host": ["localhost"], "port": ["4002"], "path": ["health"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Order Service",
+      "item": [
+        {
+          "name": "Create Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "x-user-id", "value": "1"}
+            ],
+            "url": {"raw": "http://localhost:4003/create", "protocol": "http", "host": ["localhost"], "port": ["4003"], "path": ["create"]},
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amount\": 99.99}"
+            }
+          }
+        },
+        {
+          "name": "My Orders",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "x-user-id", "value": "1"}],
+            "url": {"raw": "http://localhost:4003/my-orders", "protocol": "http", "host": ["localhost"], "port": ["4003"], "path": ["my-orders"]}
+          }
+        },
+        {
+          "name": "Trigger CPU Stress Test",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4003/stress", "protocol": "http", "host": ["localhost"], "port": ["4003"], "path": ["stress"]},
+            "description": "Causes 15s CPU spike for testing anomaly detection"
+          }
+        },
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4003/health", "protocol": "http", "host": ["localhost"], "port": ["4003"], "path": ["health"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Monitoring Service",
+      "item": [
+        {
+          "name": "Dashboard - Health",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4006/dashboard/health", "protocol": "http", "host": ["localhost"], "port": ["4006"], "path": ["dashboard", "health"]},
+            "description": "Live snapshot of all services (CPU, memory, response time, error rate)"
+          }
+        },
+        {
+          "name": "Dashboard - Metrics",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4006/dashboard/metrics?limit=50&service=auth-service", "protocol": "http", "host": ["localhost"], "port": ["4006"], "path": ["dashboard", "metrics"], "query": [{"key": "limit", "value": "50"}, {"key": "service", "value": "auth-service"}]},
+            "description": "Historical metric data from DB. Supports ?service=NAME &limit=N"
+          }
+        },
+        {
+          "name": "Dashboard - Logs",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4006/dashboard/logs?limit=50&level=ERROR", "protocol": "http", "host": ["localhost"], "port": ["4006"], "path": ["dashboard", "logs"], "query": [{"key": "limit", "value": "50"}, {"key": "level", "value": "ERROR"}]},
+            "description": "Structured logs. Supports ?service=NAME &level=INFO/WARN/ERROR &limit=N"
+          }
+        },
+        {
+          "name": "Dashboard - Incident",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4006/dashboard/incident", "protocol": "http", "host": ["localhost"], "port": ["4006"], "path": ["dashboard", "incident"]},
+            "description": "Current active incident (if any)"
+          }
+        },
+        {
+          "name": "Dashboard - Events",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4006/dashboard/events", "protocol": "http", "host": ["localhost"], "port": ["4006"], "path": ["dashboard", "events"]},
+            "description": "Healing events log (last 100 in memory)"
+          }
+        },
+        {
+          "name": "Dashboard - Buffer",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4006/dashboard/buffer?service=auth-service", "protocol": "http", "host": ["localhost"], "port": ["4006"], "path": ["dashboard", "buffer"], "query": [{"key": "service", "value": "auth-service"}]},
+            "description": "Rolling 30-sample window used by ML model"
+          }
+        },
+        {
+          "name": "Manual Outage Simulation",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "http://localhost:4006/dashboard/outage/auth-service", "protocol": "http", "host": ["localhost"], "port": ["4006"], "path": ["dashboard", "outage", "auth-service"]},
+            "description": "Stops a container to test self-healing"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Diagnosis Service",
+      "item": [
+        {
+          "name": "Diagnose Service",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4007/diagnose/auth-service", "protocol": "http", "host": ["localhost"], "port": ["4007"], "path": ["diagnose", "auth-service"]},
+            "description": "Get latest diagnosis for one service"
+          }
+        },
+        {
+          "name": "All Diagnoses",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4007/diagnoses", "protocol": "http", "host": ["localhost"], "port": ["4007"], "path": ["diagnoses"]},
+            "description": "Get latest diagnosis for each service"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Healing Service",
+      "item": [
+        {
+          "name": "Manual Heal",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "http://localhost:4008/heal/auth-service", "protocol": "http", "host": ["localhost"], "port": ["4008"], "path": ["heal", "auth-service"]},
+            "description": "Trigger smart healing for a service based on latest diagnosis"
+          }
+        },
+        {
+          "name": "Healing History",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4008/history/auth-service", "protocol": "http", "host": ["localhost"], "port": ["4008"], "path": ["history", "auth-service"]},
+            "description": "Last 50 healing actions for a service"
+          }
+        },
+        {
+          "name": "Circuit Breaker State",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4008/circuit-breakers", "protocol": "http", "host": ["localhost"], "port": ["4008"], "path": ["circuit-breakers"]},
+            "description": "Check which circuit breakers are open"
+          }
+        },
+        {
+          "name": "Reset Circuit Breaker",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "http://localhost:4008/circuit-breakers/auth-service/reset", "protocol": "http", "host": ["localhost"], "port": ["4008"], "path": ["circuit-breakers", "auth-service", "reset"]},
+            "description": "Close a circuit breaker to resume normal routing"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Predictive Alert Service",
+      "item": [
+        {
+          "name": "Forecast Service",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4009/forecast/auth-service", "protocol": "http", "host": ["localhost"], "port": ["4009"], "path": ["forecast", "auth-service"]},
+            "description": "Get trend forecast for a service (will hit SLA breach?)"
+          }
+        },
+        {
+          "name": "All Active Alerts",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4009/alerts", "protocol": "http", "host": ["localhost"], "port": ["4009"], "path": ["alerts"]},
+            "description": "Services trending toward SLA breach"
+          }
+        },
+        {
+          "name": "Alert History",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:4009/alert-history?limit=50", "protocol": "http", "host": ["localhost"], "port": ["4009"], "path": ["alert-history"], "query": [{"key": "limit", "value": "50"}]},
+            "description": "Historical predictive alerts"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ML Service",
+      "item": [
+        {
+          "name": "Predict (Test)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {"raw": "http://localhost:5000/predict", "protocol": "http", "host": ["localhost"], "port": ["5000"], "path": ["predict"]},
+            "body": {
+              "mode": "raw",
+              "raw": "[{\"cpu\": 15, \"memory\": 45, \"response_time\": 42, \"error_rate\": 0.5}, {\"cpu\": 14, \"memory\": 44, \"response_time\": 40, \"error_rate\": 0}]"
+            },
+            "description": "Send metric samples to ML model for anomaly detection"
+          }
+        },
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "http://localhost:5000/health", "protocol": "http", "host": ["localhost"], "port": ["5000"], "path": ["health"]}
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "BASE_URL",
+      "value": "http://localhost",
+      "type": "string"
+    },
+    {
+      "key": "USER_ID",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "JWT_TOKEN",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

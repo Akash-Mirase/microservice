@@ -34,4 +34,12 @@ async function generateTraffic () {
   }
 }
 
+app.get('/health', (req, res) => {
+
+  res.json({
+    service: 'traffic-generator',
+    status: 'UP'
+  })
+})
+
 generateTraffic()

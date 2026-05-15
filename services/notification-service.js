@@ -2,15 +2,57 @@ const express = require('express')
 const dotenv = require('dotenv')
 const { Kafka } = require('kafkajs')
 const client = require('prom-client')
-const cors = require("cors");
+const cors = require('cors')
+const logger = require('../shared/logger')('auth-service')
+const pool = require('../shared/db')
+
+dotenv.config()
+
+let requestCount = 0
+let errorCount = 0
 
 dotenv.config()
 
 const app = express()
-app.use(cors());
+
+app.use((req, res, next) => {
+  requestCount++
+
+  next()
+})
 app.use(express.json())
 
 client.collectDefaultMetrics()
+
+app.get('/stats', (req, res) => {
+
+  res.json({
+    requestCount,
+    errorCount
+  })
+})
+
+app.get('/health', async (req, res) => {
+
+  try {
+
+    await pool.query('SELECT 1')
+
+    res.json({
+      service: 'order-service',
+      status: 'UP'
+    })
+
+  } catch (err) {
+
+    errorCount++
+
+    res.status(500).json({
+      status: 'DOWN',
+      error: err.message
+    })
+  }
+})
 
 /* ---------------- KAFKA ---------------- */
 
@@ -76,6 +118,7 @@ async function startConsumer () {
 
             console.log(`✅ Order processed: ${data.orderId}`)
           } catch (err) {
+            errorCount++
             console.error('❌ Processing failed:', err.message)
 
             let data
@@ -131,6 +174,7 @@ async function startConsumer () {
       console.log('✅ Kafka Consumer Connected')
       break
     } catch (err) {
+      errorCount++
       console.error('❌ Kafka not ready:', err.message)
       await new Promise(r => setTimeout(r, 5000))
     }
@@ -156,6 +200,7 @@ async function startDLQConsumer () {
 
         // You can add retry logic here
       } catch (err) {
+        errorCount++
         console.error('❌ Invalid DLQ message')
       }
     }
@@ -174,6 +219,7 @@ async function init () {
     await startConsumer()
     await startDLQConsumer()
   } catch (err) {
+    errorCount++
     console.error('❌ Init failed:', err)
   }
 }
@@ -190,11 +236,21 @@ consumer.on(consumer.events.CRASH, async event => {
 
 /* ---------------- HEALTH ---------------- */
 
-app.get('/health', (req, res) => {
-  res.json({
-    service: 'notification-service',
-    status: 'UP'
-  })
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1')
+
+    res.json({
+      status: 'UP'
+    })
+  } catch (err) {
+    errorCount++
+
+    res.status(500).json({
+      status: 'DOWN',
+      error: err.message
+    })
+  }
 })
 
 /* ---------------- METRICS ---------------- */
@@ -207,6 +263,13 @@ app.get('/metrics', async (req, res) => {
 /* ---------------- SERVER ---------------- */
 
 const PORT = process.env.NOTIFICATION_PORT || 4005
+app.get('/stats', (req, res) => {
+  res.json({
+    requestCount,
+
+    errorCount
+  })
+})
 
 app.listen(PORT, () => {
   console.log(`Notification Service running on port ${PORT}`)

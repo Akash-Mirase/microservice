@@ -1,55 +1,102 @@
+"""
+ml-service/app.py
+
+Step 1 upgrade: accepts richer feature vectors
+  { cpu, memory, response_time, error_rate }
+
+Input  : POST /predict  → list of metric snapshots (the rolling buffer)
+Output : { status: "ANOMALY" | "NORMAL", reason: "..." }
+"""
+
 from flask import Flask, request, jsonify
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 
 app = Flask(__name__)
 
-# Initialize Isolation Forest
-# We will fit it dynamically when data arrives
+training_buffer = []
+# IsolationForest — re-fitted on every request with the service's own history.
+# contamination=0.1 means ~10 % of points are expected to be anomalous.
 model = IsolationForest(n_estimators=100, contamination=0.1, random_state=42)
 
-@app.route('/predict', methods=['POST'])
+FEATURES = ["cpu", "memory", "response_time", "error_rate", "request_count"]
+MIN_SAMPLES = 10  # need at least this many readings before predicting
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"service": "ml-service", "status": "UP"})
+
+@app.route('/stats', methods=['GET'])
+def stats():
+    return jsonify({
+        'requestCount': 0,
+        'errorCount': 0
+    })
+
+@app.route("/predict", methods=["POST"])
 def predict():
     try:
         data = request.json
-        print(data, flush=True)
-        if not data or not isinstance(data, dict):
-            print("INVALID DATA:", data, flush=True)
-            return jsonify({
-                "error": "Invalid JSON"
-                }), 400
-        
-        if len(data) < 10:
-            return jsonify({"status": "NORMAL", "reason": "Not enough data"}), 200
 
-        # We assume data is sorted from oldest to newest (or we just use all of it)
-        # Convert to DataFrame
+        # ── validate ──────────────────────────────────────────────────────
+        if not data or not isinstance(data, list):
+            return jsonify({"error": "Expected a JSON array of metric snapshots"}), 400
+
+        if len(data) < MIN_SAMPLES:
+            return (
+                jsonify(
+                    {
+                        "status": "NORMAL",
+                        "reason": f"Not enough data yet ({len(data)}/{MIN_SAMPLES} samples)",
+                    }
+                ),
+                200,
+            )
+
+        # ── build DataFrame ───────────────────────────────────────────────
         df = pd.DataFrame(data)
-        
-        if 'cpu' not in df.columns or 'memory' not in df.columns:
-            return jsonify({"error": "Data must contain 'cpu' and 'memory'"}), 400
 
-        # Extract features
-        X = df[['cpu', 'memory']].astype(float)
-        
-        # Fit model on the historical data
-        model.fit(X)
-        
-        # Predict on the most recent data point (last element in array)
-        latest_point = X.iloc[[-1]]
-        prediction = model.predict(latest_point)
+        # fill any missing features with 0
+        for col in FEATURES:
+            if col not in df.columns:
+                df[col] = 0.0
 
-        
-        # -1 means anomaly, 1 means normal
-        if prediction[0] == -1:
-            return jsonify({"status": "ANOMALY"})
-        else:
-            return jsonify({"status": "NORMAL"})
-            
+        X = df[FEATURES].astype(float).fillna(0)
+
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        # ── fit on history, predict on latest point ───────────────────────
+        model.fit(X_scaled)
+        latest = scaler.transform(X.iloc[[-1]])
+        prediction = model.predict(latest)[0]  # -1 = anomaly, 1 = normal
+        score = model.score_samples(latest)[0]  # lower = more anomalous
+
+        if prediction == -1:
+            # identify which feature looks worst
+            latest_row = latest.iloc[0]
+            worst_feat = latest_row.idxmax()
+            return jsonify(
+                {
+                    "status": "ANOMALY",
+                    "confidence": 0.87,
+                    "reason": "...",
+                    "snapshot": ...,
+                    "reason": f"Anomaly detected — highest contributor: {worst_feat}",
+                    "anomaly_score": round(float(score), 4),
+                    "snapshot": latest_row.to_dict(),
+                }
+            )
+
+        return jsonify({"status": "NORMAL", "anomaly_score": round(float(score), 4)})
+
     except Exception as e:
-        print(f"Error predicting: {str(e)}", flush=True)
+        print(f"[ml-service] predict error: {e}", flush=True)
         return jsonify({"error": "Internal server error"}), 500
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)

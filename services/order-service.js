@@ -6,24 +6,26 @@ const { Kafka } = require('kafkajs')
 const client = require('prom-client')
 const CircuitBreaker = require('opossum')
 const cors = require('cors')
+const logger = require('../shared/logger')('auth-service')
+const pool = require('../shared/db')
+
+dotenv.config()
+
+let requestCount = 0
+let errorCount = 0
 
 dotenv.config()
 
 const app = express()
-app.use(cors())
-app.use(express.json())
 
+app.use((req, res, next) => {
+  requestCount++
+
+  next()
+})
+app.use(express.json())
 client.collectDefaultMetrics()
 
-/* DATABASE */
-
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.DB_NAME
-})
 
 /* KAFKA */
 
@@ -41,6 +43,7 @@ async function connectKafka () {
       console.log('✅ Kafka Producer Connected')
       break
     } catch (err) {
+      errorCount++
       console.log('⏳ Waiting for Kafka...')
       await new Promise(r => setTimeout(r, 5000))
     }
@@ -51,11 +54,22 @@ connectKafka()
 
 /* HEALTH */
 
-app.get('/health', (req, res) => {
-  res.json({
-    service: 'order-service',
-    status: 'UP'
-  })
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1')
+
+    res.json({
+      service: 'order-service',
+      status: 'UP'
+    })
+  } catch (err) {
+    errorCount++
+
+    res.status(500).json({
+      status: 'DOWN',
+      error: err.message
+    })
+  }
 })
 
 async function paymentCall (data) {
@@ -129,6 +143,7 @@ app.post('/create', async (req, res) => {
       payment: paymentResponse
     })
   } catch (err) {
+    errorCount++
     console.error(err)
     res.status(500).json({
       error: 'Order creation failed'
@@ -175,6 +190,13 @@ app.get('/metrics', async (req, res) => {
 /* SERVER */
 
 const PORT = process.env.ORDER_PORT || 4003
+app.get('/stats', (req, res) => {
+
+  res.json({
+    requestCount,
+    errorCount
+  })
+})
 
 app.listen(PORT, () => {
   console.log(`Order Service running on port ${PORT}`)
