@@ -2,9 +2,11 @@ const express = require('express')
 const dotenv = require('dotenv')
 const { randomUUID } = require('crypto')
 const cors = require('cors')
-
 const logger = require('../shared/logger')('payment-service')
 const pool = require('../shared/db')
+const helmet = require('helmet')
+const rateLimit = require('express-rate-limit')
+const metrics = require('../shared/metrics')
 
 dotenv.config()
 
@@ -15,9 +17,18 @@ let errorCount = 0
 
 app.use(cors())
 app.use(express.json())
+app.use(helmet())
+
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100
+  })
+)
 
 app.use((req, res, next) => {
   requestCount++
+  metrics.requestCounter.inc()
 
   next()
 })
@@ -99,14 +110,11 @@ app.post('/refund', (req, res) => {
 /* ---------------- SERVER ---------------- */
 
 const PORT = process.env.PAYMENT_PORT || 4004
-const client = require('prom-client')
-client.collectDefaultMetrics({
-  prefix: 'payment_service_'
-})
 
 app.get('/metrics', async (req, res) => {
-  res.set('Content-Type', client.register.contentType)
-  res.end(await client.register.metrics())
+  res.set('Content-Type', metrics.client.register.contentType)
+
+  res.end(await metrics.client.register.metrics())
 })
 
 app.get('/stats', (req, res) => {

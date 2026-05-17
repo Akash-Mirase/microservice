@@ -1,9 +1,9 @@
 /**
  * dashboard/Dashboard.jsx
- * 
+ *
  * Full-featured React dashboard for self-healing microservices platform
  * Shows: health, metrics, diagnoses, healing actions, alerts
- * 
+ *
  * To run:
  *   npm install react recharts axios
  *   Create React App or copy this into your React project
@@ -11,6 +11,13 @@
 
 import React, { useState, useEffect, useMemo } from 'react'
 import axios from 'axios'
+import { io } from 'socket.io-client'
+import Topology from './topology'
+import SystemMetricsChart from './charts/SystemMetricsChart'
+import IncidentTimeline from './components/IncidentTimeline'
+import RootCausePanel from './components/RootCausePanel'
+import AnomalyHeatmap from './components/AnomalyHeatmap'
+import SLAPanel from './components/SLAPanel'
 
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:4006'
 
@@ -24,17 +31,53 @@ export default function Dashboard () {
   const [diagnoses, setDiagnoses] = useState([])
   const [alerts, setAlerts] = useState([])
   const [loading, setLoading] = useState(true)
+  const [incident, setIncident] = useState(null)
+
+  const [events, setEvents] = useState([])
+
+  const [services, setServices] = useState([])
+  const [timeline, setTimeline] = useState([])
+  const [rootCause, setRootCause] = useState(null)
+  const [heatmap, setHeatmap] = useState([])
+  const [sla, setSla] = useState(null)
+  const [connected, setConnected] = useState(false)
 
   useEffect(() => {
+    const loadDashboardData = async () => {
+      try {
+        const [eventsRes, rootRes, heatmapRes, slaRes] = await Promise.all([
+          axios.get(`${API_BASE}/dashboard/events`),
+
+          axios.get(`${API_BASE}/dashboard/root-cause`),
+          axios.get(`${API_BASE}/dashboard/heatmap`),
+          axios.get(`${API_BASE}/dashboard/sla`)
+        ])
+
+        setTimeline(eventsRes.data)
+
+        setRootCause(rootRes.data)
+
+        setHeatmap(heatmapRes.data)
+
+        setSla(slaRes.data)
+      } catch (err) {
+        console.error(err)
+      }
+    }
     const fetchData = async () => {
       try {
         const [healthRes, diagRes, alertRes] = await Promise.all([
           axios.get(`${API_BASE}/dashboard/health`),
-          axios.get('http://localhost:4007/diagnoses').catch(() => ({ data: [] })),
-          axios.get('http://localhost:4009/alerts').catch(() => ({ data: [] }))
+
+          axios.get(`${API_BASE}/diagnoses`).catch(() => ({ data: [] })),
+
+          axios.get(`${API_BASE}/alerts`).catch(() => ({ data: [] }))
         ])
+
         setHealth(healthRes.data)
+
         setDiagnoses(diagRes.data)
+
         setAlerts(alertRes.data)
       } catch (err) {
         console.error('Failed to fetch dashboard data:', err)
@@ -44,18 +87,91 @@ export default function Dashboard () {
     }
 
     fetchData()
-    const interval = setInterval(fetchData, 10000)  // refresh every 10s
-    return () => clearInterval(interval)
+    loadDashboardData()
+
+    const socket = io(API_BASE)
+    socket.on('service-update', data => {
+      setServices(data)
+    })
+
+    socket.on('incident-update', data => {
+      setIncident(data)
+    })
+
+    socket.on('event-update', data => {
+      setEvents(prev => [data, ...prev])
+    })
+    socket.on('connect', () => {
+       setConnected(true)
+    })
+
+     socket.on('disconnect', () => {
+       setConnected(false)
+     })
+
+    const interval = setInterval(() => {
+      fetchData()
+
+      loadDashboardData()
+    }, 5000)
+    return () => {
+      socket.disconnect()
+
+      clearInterval(interval)
+    }
   }, [])
+
+  const healthyServices = useMemo(
+    () => (services.length ? services : health),
+    [services, health]
+  )
 
   if (loading) return <LoadingScreen />
 
   return (
     <div style={styles.container}>
       <Header />
+      <div
+            style={{
+              position: 'fixed',
+              top: '20px',
+              right: '20px',
+              padding: '8px 14px',
+              borderRadius: '20px',
+              background: connected ? '#27ae60' : '#e74c3c',
+              color: 'white',
+              fontWeight: 'bold',
+              zIndex: 9999,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+              }}
+              >
+  {connected ? '🟢 LIVE' : '🔴 DISCONNECTED'}
+</div>
       <Navigation tab={tab} setTab={setTab} />
-      
-      {tab === 'overview' && <OverviewTab health={health} diagnoses={diagnoses} alerts={alerts} />}
+
+      {tab === 'overview' && (
+        <>
+          <OverviewTab
+            health={healthyServices}
+            diagnoses={diagnoses}
+            alerts={alerts}
+          />
+          <Topology />
+
+          <SystemMetricsChart />
+
+          <IncidentTimeline timeline={timeline} />
+
+          <RootCausePanel rootCause={rootCause} />
+
+          <AnomalyHeatmap heatmap={heatmap} />
+
+          <SLAPanel sla={sla} />
+          <ErrorBoundary>
+           <SystemMetricsChart />
+          </ErrorBoundary>
+        </>
+      )}
       {tab === 'metrics' && <MetricsTab health={health} />}
       {tab === 'diagnoses' && <DiagnosesTab diagnoses={diagnoses} />}
       {tab === 'healing' && <HealingTab diagnoses={diagnoses} />}
@@ -76,23 +192,35 @@ function OverviewTab ({ health, diagnoses, alerts }) {
   return (
     <div style={styles.tabContent}>
       <div style={styles.grid3}>
-        <StatCard label="Services Healthy" value={`${healthyCount}/${health.length}`} color="green" />
-        <StatCard label="Critical Issues" value={criticalCount} color={criticalCount > 0 ? 'red' : 'green'} />
-        <StatCard label="Predictive Alerts" value={alertCount} color={alertCount > 0 ? 'amber' : 'green'} />
+        <StatCard
+          label='Services Healthy'
+          value={`${healthyCount}/${health.length}`}
+          color='green'
+        />
+        <StatCard
+          label='Critical Issues'
+          value={criticalCount}
+          color={criticalCount > 0 ? 'red' : 'green'}
+        />
+        <StatCard
+          label='Predictive Alerts'
+          value={alertCount}
+          color={alertCount > 0 ? 'amber' : 'green'}
+        />
       </div>
 
-      <Section title="Service Health">
+      <Section title='Service Health'>
         <ServiceGrid services={health} />
       </Section>
 
       {diagnoses.length > 0 && (
-        <Section title="Active Diagnoses">
+        <Section title='Active Diagnoses'>
           <DiagnosisGrid diagnoses={diagnoses.slice(0, 5)} />
         </Section>
       )}
 
       {alerts.length > 0 && (
-        <Section title="Predictive Alerts">
+        <Section title='Predictive Alerts'>
           <AlertGrid alerts={alerts.slice(0, 5)} />
         </Section>
       )}
@@ -106,17 +234,34 @@ function MetricsTab ({ health }) {
 
   useEffect(() => {
     if (!selectedService) return
-    axios.get(`${API_BASE}/dashboard/metrics`, { params: { service: selectedService, limit: 50 } })
+    axios
+      .get(`${API_BASE}/dashboard/metrics`, {
+        params: { service: selectedService, limit: 50 }
+      })
       .then(res => setMetrics(res.data.reverse()))
       .catch(err => console.error('Failed to fetch metrics:', err))
   }, [selectedService])
+
+  useEffect(() => {
+    if (!selectedService && health.length > 0) {
+      setSelectedService(health[0].name)
+    }
+  }, [health])
 
   return (
     <div style={styles.tabContent}>
       <div style={styles.filterBar}>
         <label>Service:</label>
-        <select value={selectedService} onChange={e => setSelectedService(e.target.value)} style={styles.select}>
-          {health.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+        <select
+          value={selectedService}
+          onChange={e => setSelectedService(e.target.value)}
+          style={styles.select}
+        >
+          {health.map(s => (
+            <option key={s.name || s.service_name} value={s.name || s.service_name}>
+              {s.name || s.service_name}
+            </option>
+          ))}
         </select>
       </div>
 
@@ -124,7 +269,7 @@ function MetricsTab ({ health }) {
         <MetricsChart metrics={metrics} />
       </Section>
 
-      <Section title="Raw Data">
+      <Section title='Raw Data'>
         <table style={styles.table}>
           <thead>
             <tr>
@@ -155,14 +300,20 @@ function MetricsTab ({ health }) {
 function DiagnosesTab ({ diagnoses }) {
   return (
     <div style={styles.tabContent}>
-      <Section title="Service Diagnoses">
+      <Section title='Service Diagnoses'>
         {diagnoses.length === 0 ? (
           <p style={styles.emptyState}>All services operating normally</p>
         ) : (
           <div style={styles.gridSingle}>
             {diagnoses.map(d => (
               <Card key={d.service_name} style={styles.card}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'start'
+                  }}
+                >
                   <div>
                     <h3 style={styles.cardTitle}>{d.service_name}</h3>
                     <Badge label={d.anomaly_type} severity={d.severity} />
@@ -189,20 +340,36 @@ function DiagnosesTab ({ diagnoses }) {
 
 function HealingTab ({ diagnoses }) {
   const [history, setHistory] = useState([])
-  const [selectedService, setSelectedService] = useState(diagnoses[0]?.service_name || '')
+  const [selectedService, setSelectedService] = useState(
+    diagnoses[0]?.s.name || s.service_name || ''
+  )
 
   useEffect(() => {
     if (!selectedService) return
-    axios.get(`http://localhost:4008/history/${selectedService}`)
+    axios
+      .get(`${API_BASE}/history/${selectedService}`)
       .then(res => setHistory(res.data))
       .catch(() => {})
   }, [selectedService])
 
-  const handleManualHeal = async (service) => {
+  useEffect(() => {
+    if (!selectedService && diagnoses.length > 0) {
+      setSelectedService(diagnoses[0].s.name || s.service_name)
+    }
+  }, [diagnoses])
+
+  const handleManualHeal = async service => {
     try {
-      const res = await axios.post(`http://localhost:4008/heal/${service}`)
+      const res = await axios.post(`${API_BASE}/heal/${service}`)
       alert(`Healing triggered: ${res.data.actions.length} action(s) taken`)
-      setHistory(prev => [{ service_name: service, action_type: 'MANUAL_HEAL', created_at: new Date().toISOString() }, ...prev])
+      setHistory(prev => [
+        {
+          service: service,
+          action_type: 'MANUAL_HEAL',
+          created_at: new Date().toISOString()
+        },
+        ...prev
+      ])
     } catch (err) {
       alert('Healing failed: ' + err.message)
     }
@@ -212,10 +379,21 @@ function HealingTab ({ diagnoses }) {
     <div style={styles.tabContent}>
       <div style={styles.filterBar}>
         <label>Service:</label>
-        <select value={selectedService} onChange={e => setSelectedService(e.target.value)} style={styles.select}>
-          {diagnoses.map(d => <option key={d.service_name} value={d.service_name}>{d.service_name}</option>)}
+        <select
+          value={selectedService}
+          onChange={e => setSelectedService(e.target.value)}
+          style={styles.select}
+        >
+          {diagnoses.map(d => (
+            <option key={d.service_name} value={d.service_name}>
+              {d.service_name}
+            </option>
+          ))}
         </select>
-        <button style={styles.button} onClick={() => handleManualHeal(selectedService)}>
+        <button
+          style={styles.button}
+          onClick={() => handleManualHeal(selectedService)}
+        >
           ⚡ Manual Heal
         </button>
       </div>
@@ -236,8 +414,15 @@ function HealingTab ({ diagnoses }) {
               <tr key={i}>
                 <td>{new Date(h.created_at).toLocaleTimeString()}</td>
                 <td>{h.anomaly_type || '-'}</td>
-                <td><code>{h.action_type}</code></td>
-                <td><Badge label={h.action_status} severity={h.action_status === 'SUCCESS' ? 20 : 50} /></td>
+                <td>
+                  <code>{h.action_type}</code>
+                </td>
+                <td>
+                  <Badge
+                    label={h.action_status}
+                    severity={h.action_status === 'SUCCESS' ? 20 : 50}
+                  />
+                </td>
                 <td style={{ fontSize: '12px', color: '#666' }}>{h.message}</td>
               </tr>
             ))}
@@ -251,23 +436,51 @@ function HealingTab ({ diagnoses }) {
 function AlertsTab ({ alerts }) {
   return (
     <div style={styles.tabContent}>
-      <Section title="Predictive Alerts">
+      <Section title='Predictive Alerts'>
         {alerts.length === 0 ? (
-          <p style={styles.emptyState}>No predictive alerts. System trending healthy.</p>
+          <p style={styles.emptyState}>
+            No predictive alerts. System trending healthy.
+          </p>
         ) : (
           <div style={styles.gridSingle}>
             {alerts.map((a, i) => (
-              <Card key={i} style={{ ...styles.card, borderLeft: `4px solid ${getRiskColor(a.risk_level)}` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <Card
+                key={i}
+                style={{
+                  ...styles.card,
+                  borderLeft: `4px solid ${getRiskColor(a.risk_level)}`
+                }}
+              >
+                <div
+                  style={{ display: 'flex', justifyContent: 'space-between' }}
+                >
                   <h3 style={styles.cardTitle}>{a.service}</h3>
                   <Severity level={a.risk_level === 'CRITICAL' ? 90 : 60} />
                 </div>
                 <p style={{ ...styles.text, marginTop: '8px', color: '#666' }}>
-                  <strong>{a.risk_level} Risk:</strong> {a.ttl_minutes?.toFixed(1)} min to SLA breach
+                  <strong>{a.risk_level} Risk:</strong>{' '}
+                  {a.ttl_minutes?.toFixed(1)} min to SLA breach
                 </p>
                 <details style={{ marginTop: '12px' }}>
-                  <summary style={{ cursor: 'pointer', color: '#0066cc', fontSize: '12px' }}>View forecast</summary>
-                  <pre style={{ fontSize: '11px', background: '#f5f5f5', padding: '8px', borderRadius: '4px', overflow: 'auto', maxHeight: '200px' }}>
+                  <summary
+                    style={{
+                      cursor: 'pointer',
+                      color: '#0066cc',
+                      fontSize: '12px'
+                    }}
+                  >
+                    View forecast
+                  </summary>
+                  <pre
+                    style={{
+                      fontSize: '11px',
+                      background: '#f5f5f5',
+                      padding: '8px',
+                      borderRadius: '4px',
+                      overflow: 'auto',
+                      maxHeight: '200px'
+                    }}
+                  >
                     {JSON.stringify(a.forecast || a.metric_forecast, null, 2)}
                   </pre>
                 </details>
@@ -288,7 +501,9 @@ function Header () {
   return (
     <header style={styles.header}>
       <h1 style={styles.title}>🔧 Self-Healing Microservices Dashboard</h1>
-      <p style={styles.subtitle}>Real-time monitoring, diagnosis, healing, and predictive alerts</p>
+      <p style={styles.subtitle}>
+        Real-time monitoring, diagnosis, healing, and predictive alerts
+      </p>
     </header>
   )
 }
@@ -307,7 +522,10 @@ function Navigation ({ tab, setTab }) {
         <button
           key={t.id}
           onClick={() => setTab(t.id)}
-          style={{ ...styles.navButton, ...(tab === t.id ? styles.navButtonActive : {}) }}
+          style={{
+            ...styles.navButton,
+            ...(tab === t.id ? styles.navButtonActive : {})
+          }}
         >
           {t.label}
         </button>
@@ -320,20 +538,26 @@ function ServiceGrid ({ services }) {
   return (
     <div style={styles.grid}>
       {services.map(s => (
-        <Card key={s.name} style={styles.serviceCard}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={styles.serviceName}>{s.name}</h3>
+        <Card key={s.name || s.service_name} style={styles.serviceCard}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}
+          >
+            <h3 style={styles.serviceName}>{s.name || s.service_name}</h3>
             <StatusBadge status={s.status} />
           </div>
           <div style={styles.metricRow}>
-            <Metric label="CPU" value={s.cpu} unit="%" />
-            <Metric label="Memory" value={s.memory} unit="%" />
-            <Metric label="Response" value={s.responseTime} unit="" />
+            <Metric label='CPU' value={s.cpu} unit='%' />
+            <Metric label='Memory' value={s.memory} unit='%' />
+            <Metric label='Response' value={s.responseTime} unit='' />
           </div>
           <div style={styles.metricRow}>
-            <Metric label="Errors" value={s.errorRate} unit="/min" />
-            <Metric label="Requests" value={s.requestCount} unit="" />
-            <Metric label="Status" value={s.recovery} unit="" />
+            <Metric label='Errors' value={s.errorRate} unit='/min' />
+            <Metric label='Requests' value={s.requestCount} unit='' />
+            <Metric label='Status' value={s.recovery} unit='' />
           </div>
         </Card>
       ))}
@@ -351,7 +575,14 @@ function DiagnosisGrid ({ diagnoses }) {
             <Severity level={d.severity} />
           </div>
           <Badge label={d.anomaly_type} severity={d.severity} />
-          <p style={{ ...styles.text, fontSize: '12px', marginTop: '8px', color: '#666' }}>
+          <p
+            style={{
+              ...styles.text,
+              fontSize: '12px',
+              marginTop: '8px',
+              color: '#666'
+            }}
+          >
             {d.root_cause}
           </p>
         </Card>
@@ -364,9 +595,18 @@ function AlertGrid ({ alerts }) {
   return (
     <div style={styles.grid}>
       {alerts.map((a, i) => (
-        <Card key={i} style={{ ...styles.card, borderLeft: `4px solid ${getRiskColor(a.risk_level)}` }}>
+        <Card
+          key={i}
+          style={{
+            ...styles.card,
+            borderLeft: `4px solid ${getRiskColor(a.risk_level)}`
+          }}
+        >
           <h4 style={styles.cardTitle}>{a.service}</h4>
-          <Badge label={a.risk_level} severity={a.risk_level === 'CRITICAL' ? 90 : 60} />
+          <Badge
+            label={a.risk_level}
+            severity={a.risk_level === 'CRITICAL' ? 90 : 60}
+          />
           <p style={{ ...styles.text, fontSize: '12px', marginTop: '8px' }}>
             {a.ttl_minutes?.toFixed(1)} min to SLA breach
           </p>
@@ -377,7 +617,8 @@ function AlertGrid ({ alerts }) {
 }
 
 function MetricsChart ({ metrics }) {
-  if (metrics.length === 0) return <p style={styles.emptyState}>Loading metrics...</p>
+  if (metrics.length === 0)
+    return <p style={styles.emptyState}>Loading metrics...</p>
 
   const chartData = metrics.map(m => ({
     time: new Date(m.created_at).toLocaleTimeString(),
@@ -387,27 +628,79 @@ function MetricsChart ({ metrics }) {
   }))
 
   return (
-    <div style={{ overflowX: 'auto', background: '#f9f9f9', padding: '16px', borderRadius: '8px' }}>
-      <svg width="100%" height="300" style={{ minWidth: '600px' }}>
-        <text x="20" y="25" fontSize="12" fontWeight="bold">CPU & Memory %</text>
+    <div
+      style={{
+        overflowX: 'auto',
+        background: '#f9f9f9',
+        padding: '16px',
+        borderRadius: '8px'
+      }}
+    >
+      <svg width='100%' height='300' style={{ minWidth: '600px' }}>
+        <text x='20' y='25' fontSize='12' fontWeight='bold'>
+          CPU & Memory %
+        </text>
         {chartData.map((d, i) => {
-          const x = 50 + (i / chartData.length) * (chartData.length > 1 ? 600 : 100)
+          const x =
+            50 + (i / chartData.length) * (chartData.length > 1 ? 600 : 100)
           const y1 = 250 - d.cpu * 1.5
           const y2 = 250 - d.memory * 1.5
           return (
             <g key={i}>
-              <circle cx={x} cy={y1} r="2" fill="#e74c3c" opacity="0.7" />
-              <circle cx={x} cy={y2} r="2" fill="#3498db" opacity="0.7" />
+              <circle cx={x} cy={y1} r='2' fill='#e74c3c' opacity='0.7' />
+              <circle cx={x} cy={y2} r='2' fill='#3498db' opacity='0.7' />
             </g>
           )
         })}
-        <line x1="50" y1="250" x2="650" y2="250" stroke="#ccc" strokeWidth="1" />
-        <text x="20" y="270" fontSize="11" fill="#666">Older</text>
-        <text x="620" y="270" fontSize="11" fill="#666">Newer</text>
+        <line
+          x1='50'
+          y1='250'
+          x2='650'
+          y2='250'
+          stroke='#ccc'
+          strokeWidth='1'
+        />
+        <text x='20' y='270' fontSize='11' fill='#666'>
+          Older
+        </text>
+        <text x='620' y='270' fontSize='11' fill='#666'>
+          Newer
+        </text>
       </svg>
-      <div style={{ display: 'flex', gap: '20px', marginTop: '12px', fontSize: '12px' }}>
-        <div><span style={{ display: 'inline-block', width: '10px', height: '10px', background: '#e74c3c', borderRadius: '2px', marginRight: '4px' }} />CPU</div>
-        <div><span style={{ display: 'inline-block', width: '10px', height: '10px', background: '#3498db', borderRadius: '2px', marginRight: '4px' }} />Memory</div>
+      <div
+        style={{
+          display: 'flex',
+          gap: '20px',
+          marginTop: '12px',
+          fontSize: '12px'
+        }}
+      >
+        <div>
+          <span
+            style={{
+              display: 'inline-block',
+              width: '10px',
+              height: '10px',
+              background: '#e74c3c',
+              borderRadius: '2px',
+              marginRight: '4px'
+            }}
+          />
+          CPU
+        </div>
+        <div>
+          <span
+            style={{
+              display: 'inline-block',
+              width: '10px',
+              height: '10px',
+              background: '#3498db',
+              borderRadius: '2px',
+              marginRight: '4px'
+            }}
+          />
+          Memory
+        </div>
       </div>
     </div>
   )
@@ -427,7 +720,10 @@ function Metric ({ label, value, unit }) {
   return (
     <div style={{ flex: 1 }}>
       <p style={styles.metricLabel}>{label}</p>
-      <p style={styles.metricValue}>{typeof value === 'number' ? value.toFixed(1) : value}{unit}</p>
+      <p style={styles.metricValue}>
+        {typeof value === 'number' ? value.toFixed(1) : value}
+        {unit}
+      </p>
     </div>
   )
 }
@@ -443,22 +739,31 @@ function StatusBadge ({ status }) {
 
 function Badge ({ label, severity }) {
   const colors = {
-    'MEMORY_LEAK': '#9b59b6',
-    'CPU_LEAK': '#e67e22',
-    'CASCADE_FAILURE': '#e74c3c',
-    'CACHE_POISON': '#3498db',
-    'RESOURCE_EXHAUSTION': '#e74c3c',
-    'SUCCESS': '#27ae60',
-    'FAILED': '#e74c3c',
-    'PENDING': '#f39c12',
-    'CRITICAL': '#e74c3c',
-    'HIGH': '#f39c12',
-    'MEDIUM': '#3498db',
-    'LOW': '#27ae60'
+    MEMORY_LEAK: '#9b59b6',
+    CPU_LEAK: '#e67e22',
+    CASCADE_FAILURE: '#e74c3c',
+    CACHE_POISON: '#3498db',
+    RESOURCE_EXHAUSTION: '#e74c3c',
+    SUCCESS: '#27ae60',
+    FAILED: '#e74c3c',
+    PENDING: '#f39c12',
+    CRITICAL: '#e74c3c',
+    HIGH: '#f39c12',
+    MEDIUM: '#3498db',
+    LOW: '#27ae60'
   }
   return (
-    <span style={{ ...styles.badge, background: colors[label] || '#95a5a6', fontSize: '11px', padding: '4px 8px', marginTop: '8px', display: 'inline-block' }}>
-      {label} {severity !== undefined && `(${severity.toFixed(0)}%)`}
+    <span
+      style={{
+        ...styles.badge,
+        background: colors[label] || '#95a5a6',
+        fontSize: '11px',
+        padding: '4px 8px',
+        marginTop: '8px',
+        display: 'inline-block'
+      }}
+    >
+      {label} {severity !== undefined && `(${Number(severity || 0).toFixed(0)}%)`}
     </span>
   )
 }
@@ -486,7 +791,15 @@ function Card ({ children, style }) {
 
 function LoadingScreen () {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#f5f5f5' }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: '#f5f5f5'
+      }}
+    >
       <div style={{ textAlign: 'center' }}>
         <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚙️</div>
         <p style={{ fontSize: '18px', color: '#666' }}>Loading dashboard...</p>
@@ -678,6 +991,11 @@ const styles = {
 }
 
 function getRiskColor (level) {
-  const colors = { CRITICAL: '#e74c3c', HIGH: '#f39c12', MEDIUM: '#3498db', LOW: '#27ae60' }
+  const colors = {
+    CRITICAL: '#e74c3c',
+    HIGH: '#f39c12',
+    MEDIUM: '#3498db',
+    LOW: '#27ae60'
+  }
   return colors[level] || '#95a5a6'
 }

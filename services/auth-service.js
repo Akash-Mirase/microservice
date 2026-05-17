@@ -6,6 +6,10 @@ const dotenv = require('dotenv')
 const cors = require('cors')
 const logger = require('../shared/logger')('auth-service')
 const pool = require('../shared/db')
+const helmet = require('helmet')
+const rateLimit = require('express-rate-limit')
+const metrics = require('../shared/metrics')
+
 
 let requestCount = 0
 let errorCount = 0
@@ -17,10 +21,21 @@ app.use(cors())
 
 app.use((req, res, next) => {
   requestCount++
+  metrics.requestCounter.inc()
 
   next()
 })
 app.use(express.json())
+
+
+app.use(helmet())
+
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100
+  })
+)
 
 /*  VALIDATION  */
 
@@ -179,14 +194,11 @@ app.get('/stress', async (req, res) => {
 /*  SERVER  */
 
 const PORT = process.env.AUTH_PORT || 4001
-const client = require('prom-client')
-client.collectDefaultMetrics({
-  prefix: 'auth_service_'
-})
 
 app.get('/metrics', async (req, res) => {
-  res.set('Content-Type', client.register.contentType)
-  res.end(await client.register.metrics())
+  res.set('Content-Type', metrics.client.register.contentType)
+
+  res.end(await metrics.client.register.metrics())
 })
 app.get('/stats', (req, res) => {
   res.json({

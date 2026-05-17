@@ -29,12 +29,11 @@ MIN_SAMPLES = 10  # need at least this many readings before predicting
 def health():
     return jsonify({"service": "ml-service", "status": "UP"})
 
-@app.route('/stats', methods=['GET'])
+
+@app.route("/stats", methods=["GET"])
 def stats():
-    return jsonify({
-        'requestCount': 0,
-        'errorCount': 0
-    })
+    return jsonify({"requestCount": 0, "errorCount": 0})
+
 
 @app.route("/predict", methods=["POST"])
 def predict():
@@ -76,15 +75,13 @@ def predict():
         score = model.score_samples(latest)[0]  # lower = more anomalous
 
         if prediction == -1:
-            # identify which feature looks worst
-            latest_row = latest.iloc[0]
+            latest_row = X.iloc[-1]
             worst_feat = latest_row.idxmax()
+
             return jsonify(
                 {
                     "status": "ANOMALY",
                     "confidence": 0.87,
-                    "reason": "...",
-                    "snapshot": ...,
                     "reason": f"Anomaly detected — highest contributor: {worst_feat}",
                     "anomaly_score": round(float(score), 4),
                     "snapshot": latest_row.to_dict(),

@@ -21,19 +21,20 @@ require('dotenv').config()
 const express = require('express')
 const axios   = require('axios')
 const cors    = require('cors')
-const { Pool } = require('pg')
+const pool = require('../shared/db')
+const helmet = require('helmet')
+const rateLimit = require('express-rate-limit')
 
 const app = express()
 app.use(cors())
 app.use(express.json())
 
-const pool = new Pool({
-  host:     process.env.DB_HOST || 'postgres',
-  port:     parseInt(process.env.DB_PORT || '5432'),
-  user:     process.env.DB_USER || 'admin',
-  password: process.env.DB_PASS || 'admin123',
-  database: process.env.DB_NAME || 'selfhealing'
-})
+app.use(helmet())
+
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100
+}))
 
 const SERVICES = [
   'auth-service', 'user-service', 'order-service',

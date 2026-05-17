@@ -1,13 +1,14 @@
 const express = require('express')
 const dotenv = require('dotenv')
 const axios = require('axios')
-const { Pool } = require('pg')
 const { Kafka } = require('kafkajs')
-const client = require('prom-client')
 const CircuitBreaker = require('opossum')
 const cors = require('cors')
 const logger = require('../shared/logger')('auth-service')
 const pool = require('../shared/db')
+const helmet = require('helmet')
+const rateLimit = require('express-rate-limit')
+const metrics = require('../shared/metrics')
 
 dotenv.config()
 
@@ -20,12 +21,20 @@ const app = express()
 
 app.use((req, res, next) => {
   requestCount++
+  metrics.requestCounter.inc()
 
   next()
 })
 app.use(express.json())
-client.collectDefaultMetrics()
 
+app.use(helmet())
+
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100
+  })
+)
 
 /* KAFKA */
 
@@ -183,15 +192,15 @@ app.get('/stress', (req, res) => {
 /* METRICS */
 
 app.get('/metrics', async (req, res) => {
-  res.set('Content-Type', client.register.contentType)
-  res.end(await client.register.metrics())
+  res.set('Content-Type', metrics.client.register.contentType)
+
+  res.end(await metrics.client.register.metrics())
 })
 
 /* SERVER */
 
 const PORT = process.env.ORDER_PORT || 4003
 app.get('/stats', (req, res) => {
-
   res.json({
     requestCount,
     errorCount
