@@ -8,4 +8,4 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-CMD ["python", "services/ml-service.py"]
+CMD ["python", "app.py"]

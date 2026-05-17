@@ -9,7 +9,7 @@ function getPool () {
       port: parseInt(process.env.DB_PORT || '5432'),
       user: process.env.DB_USER || 'admin',
       password: process.env.DB_PASS || 'admin123',
-      database: process.env.DB_NAME || 'selfhealing',
+      database: process.env.DB_NAME || 'self_healing',
       max: 3,
       idleTimeoutMillis: 10000
     })

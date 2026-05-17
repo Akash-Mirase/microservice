@@ -46,3 +46,8 @@ app.get('/health', (req, res) => {
 })
 
 generateTraffic()
+
+const PORT = 4010
+app.listen(PORT, () => {
+  console.log(`Traffic Generator running on port ${PORT}`)
+})

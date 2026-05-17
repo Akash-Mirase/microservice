@@ -270,7 +270,7 @@ async function checkServices () {
     }
 
     /* ── 2. Docker stats ── */
-    
+
     const dockerStats = await getContainerStats(svc.container)
     cpu = dockerStats.cpu
     memory = dockerStats.memory
@@ -375,14 +375,14 @@ async function checkServices () {
           snapshot
         )
         if (cpu > 95 || memory > 95 || errorRate > 50) {
-          await handleFailure(svc.name, 'critical-anomaly')
+          await handleFailure(svc.name, 'critical-anomaly', issue)
         }
       }
     }
 
     /* ── 10. Trigger healing for DOWN services ── */
     if (status === 'DOWN') {
-      await handleFailure(svc.name, 'health-fail')
+      await handleFailure(svc.name, 'health-fail', issue)
     }
   }
 }
@@ -391,7 +391,7 @@ async function checkServices () {
    HEALING PIPELINE  (unchanged logic, better logging)
 ───────────────────────────────────────────── */
 
-async function handleFailure (serviceName, reason) {
+async function handleFailure (serviceName, reason, issue = 'UNKNOWN') {
   const now = Date.now()
   if (lastAlert[serviceName] && now - lastAlert[serviceName] < 60000) return
   lastAlert[serviceName] = now
@@ -478,16 +478,24 @@ async function handleFailure (serviceName, reason) {
 
       await pool.query(
         `
-      INSERT INTO diagnoses (
-         service_name,
-         anomaly_type,
-         severity,
-         root_cause,
-         recommendation
-      )
-      VALUES ($1,$2,$3,$4,$5)
-   `,
-        [serviceName, issue, 'HIGH', rootCause, recommendation]
+  INSERT INTO diagnoses (
+    service_name,
+    anomaly_type,
+    severity,
+    root_cause,
+    recommendation,
+    updated_at
+  )
+  VALUES ($1,$2,$3,$4,$5,NOW())
+
+  ON CONFLICT (service_name)
+  DO UPDATE SET
+    anomaly_type = EXCLUDED.anomaly_type,
+    severity = EXCLUDED.severity,
+    root_cause = EXCLUDED.root_cause,
+    recommendation = EXCLUDED.recommendation,
+    updated_at = NOW()`,
+        [serviceName, anomalyType, severity, rootCause, recommendation]
       )
     }
 

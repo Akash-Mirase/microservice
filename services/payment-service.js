@@ -97,7 +97,7 @@ app.post('/refund', (req, res) => {
       message: 'Refund initiated',
       transactionId
     })
-  } catch {
+  } catch (err) {
     logger.error('Payment processing failed', {
       error: err.message
     })

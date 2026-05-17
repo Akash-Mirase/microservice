@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin123
-      POSTGRES_DB: selfhealing
+      POSTGRES_DB: self_healing
     ports:
       - "5432:5432"
     volumes:
@@ -178,7 +178,7 @@ services:
     env_file:
       - .env
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:4001/health" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:4000/health" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -274,6 +274,68 @@ services:
       - monitoring-service
     environment:
       - CHOKIDAR_USEPOLLING=true
+      - REACT_APP_API_URL=http://localhost:4006
+    networks:
+      - selfhealing-network
+
+  diagnosis-service:
+    build: .
+    command: node services/diagnosis-service.js
+    ports:
+      - "4007:4007"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:4007/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - selfhealing-network
+    restart: always
+
+  healing-service:
+    build: .
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: node services/healing-service.js
+    ports:
+      - "4008:4008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:4008/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - selfhealing-network
+    restart: always
+
+  predictive-alert-service:
+    build: .
+    command: node services/predictive-alert-service.js
+    ports:
+      - "4009:4009"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:4009/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - selfhealing-network
+    restart: always
 
 volumes:
   postgres-data:

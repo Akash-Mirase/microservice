@@ -15,10 +15,9 @@ dotenv.config()
 let requestCount = 0
 let errorCount = 0
 
-dotenv.config()
-
 const app = express()
 
+app.use(cors())
 app.use((req, res, next) => {
   requestCount++
   metrics.requestCounter.inc()

@@ -21,8 +21,6 @@ dotenv.config()
 let requestCount = 0
 let errorCount = 0
 
-dotenv.config()
-
 const app = express()
 
 app.use((req, res, next) => {
@@ -151,14 +149,6 @@ app.get('/metrics', async (req, res) => {
   res.set('Content-Type', metrics.client.register.contentType)
 
   res.end(await metrics.client.register.metrics())
-})
-
-app.get('/stats', (req, res) => {
-  res.json({
-    requestCount,
-
-    errorCount
-  })
 })
 
 app.listen(PORT, () => {

@@ -129,7 +129,6 @@ app.use((err, req, res, next) => {
 const PORT = process.env.GATEWAY_PORT || 4000;
 
 const client = require("prom-client");
-client.collectDefaultMetrics();
 
 app.get("/metrics", async (req, res) => {
   res.set("Content-Type", client.register.contentType);
