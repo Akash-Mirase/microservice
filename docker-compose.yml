@@ -210,7 +210,7 @@ services:
          condition: service_healthy
 
       ml-service:
-         condition: service_healthy
+         condition: service_started
     env_file:
       - .env
     healthcheck:
@@ -277,12 +277,12 @@ services:
   dashboard-ui:
     build: ./dashboard-ui
     ports:
-      - "3000:3000"
+      - "3000:80"
     depends_on:
       - monitoring-service
     environment:
       - CHOKIDAR_USEPOLLING=true
-      - REACT_APP_API_URL=http://monitoring-service:4006
+      - REACT_APP_API_URL=http://localhost:4006
     networks:
       - selfhealing-network
 

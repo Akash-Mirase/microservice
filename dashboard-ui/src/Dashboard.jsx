@@ -276,19 +276,11 @@ export default function Dashboard () {
   useEffect(() => {
     fetchAll()
     const iv = setInterval(fetchAll, 8000)
-    const socket = io('http://localhost:4006', {
+    const socket = io(API, {
       transports: ['websocket'],
       reconnection: true
     })
-    socket.on('connect', () => setConnected(true))
-    socket.on('disconnect', () => setConnected(false))
-    socket.on('service-update', data => {
-      console.log('SERVICE UPDATE:', data)
-
-      if (Array.isArray(data)) {
-        setServices(data)
-      }
-    })
+    
     socket.on('service-update', data => {
       console.log('SERVICE UPDATE:', data)
       console.log('TYPE:', typeof data)
