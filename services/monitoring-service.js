@@ -46,7 +46,12 @@ const docker = new Docker({ socketPath: '/var/run/docker.sock' })
 ───────────────────────────────────────────── */
 const app = express()
 const server = http.createServer(app)
-const io = new Server(server, { cors: { origin: '*' } })
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+})
 
 app.use(cors())
 app.use(express.json())
@@ -67,6 +72,13 @@ const result = analyzeFailure('payment-service', [
 
 console.log(result)
 
+process.on('unhandledRejection', err => {
+  console.error('Unhandled Rejection:', err)
+})
+
+process.on('uncaughtException', err => {
+  console.error('Uncaught Exception:', err)
+})
 /* ─────────────────────────────────────────────
    SERVICE REGISTRY
    Each service optionally exposes:
@@ -113,6 +125,7 @@ const serviceState = {} // live snapshot shown on dashboard
 const lastAlert = {} // cooldown tracker — avoid alert storms
 const metricsBuffer = {} // rolling window of last 30 readings per service
 const failureCounts = {}
+let serviceStateCache = []
 
 let currentIncident = { active: false, service: null, stage: null, time: null }
 let eventLogs = [] // last 100 healing events (in-memory for WS)
@@ -141,7 +154,10 @@ async function getContainerStats (containerName) {
     if (systemDelta > 0 && cpuDelta > 0) {
       cpu = (cpuDelta / systemDelta) * cpuCores * 100
     }
-    const memory = (stats.memory_stats.usage / stats.memory_stats.limit) * 100
+    const usage = stats.memory_stats.usage || 0
+    const limit = stats.memory_stats.limit || 1
+
+    const memory = (usage / limit) * 100
 
     return {
       cpu: Math.max(0, Math.round(cpu * 10) / 10),
@@ -191,7 +207,6 @@ async function saveMetric (
     console.error(`[monitoring] metrics insert failed: ${err.message}`)
   }
 }
-
 /* ─────────────────────────────────────────────
    PERSIST LOG ROW  (called by each service indirectly via shared/logger,
    but monitoring also writes its own operational logs here)
@@ -361,8 +376,15 @@ async function checkServices () {
       updatedAt: new Date().toISOString()
     }
 
+    console.log('EMITTING SERVICES')
+    console.log(Object.values(serviceState))
+
     /* ── 8. Emit live state to dashboard via WebSocket ── */
     io.emit('service-update', Object.values(serviceState))
+    console.log(
+      'EMITTING:',
+      JSON.stringify(Object.values(serviceState), null, 2)
+    )
 
     /* ── 9. ML anomaly check (on UP services with enough data) ── */
     if (status === 'UP') {
@@ -382,7 +404,18 @@ async function checkServices () {
 
     /* ── 10. Trigger healing for DOWN services ── */
     if (status === 'DOWN') {
-      await handleFailure(svc.name, 'health-fail', issue)
+      failureCounts[svc.name] = (failureCounts[svc.name] || 0) + 1
+
+      console.log(`${svc.name} failures:`, failureCounts[svc.name])
+
+      // restart only after 3 failures
+      if (failureCounts[svc.name] >= 3) {
+        await handleFailure(svc.name, 'health-fail', issue)
+
+        failureCounts[svc.name] = 0
+      }
+    } else {
+      failureCounts[svc.name] = 0
     }
   }
 }
@@ -393,7 +426,7 @@ async function checkServices () {
 
 async function handleFailure (serviceName, reason, issue = 'UNKNOWN') {
   const now = Date.now()
-  if (lastAlert[serviceName] && now - lastAlert[serviceName] < 60000) return
+  if (lastAlert[serviceName] && now - lastAlert[serviceName] < 10000) return
   lastAlert[serviceName] = now
   failureCounts[serviceName] = (failureCounts[serviceName] || 0) + 1
   if (failureCounts[serviceName] > 5) {
@@ -427,17 +460,16 @@ async function handleFailure (serviceName, reason, issue = 'UNKNOWN') {
     time: new Date().toLocaleTimeString()
   }
   io.emit('incident-update', currentIncident)
-
+  await pushEvent({
+    type: 'SERVICE_DOWN',
+    service: serviceName,
+    message: 'Health check failed'
+  })
   for (const step of stages) {
     currentIncident.stage = step.stage
     if (serviceState[serviceName])
       serviceState[serviceName].recovery = step.stage
 
-    await pushEvent({
-      type: 'SERVICE_DOWN',
-      service: serviceName,
-      message: 'Health check failed'
-    })
     await saveLog(serviceName, 'INFO', `Healing: ${step.stage} — ${step.msg}`)
 
     if (step.stage === 'Restarting') {
@@ -445,8 +477,9 @@ async function handleFailure (serviceName, reason, issue = 'UNKNOWN') {
         const container = docker.getContainer(
           `self-healing-system-${serviceName}-1`
         )
+        serviceState[serviceName].status = 'RECOVERING'
         await container.restart()
-        await delay(15000)
+        await delay(30000)
       } catch (err) {
         await saveLog(serviceName, 'ERROR', 'Container restart failed', {
           err: err.message
@@ -472,8 +505,31 @@ async function handleFailure (serviceName, reason, issue = 'UNKNOWN') {
       ]
     )
 
+    try {
+      await axios.post('http://healing-service:4008/heal', {
+        serviceName,
+        issue: 'SERVICE_DOWN'
+      })
+    } catch (err) {
+      console.error('[healing request]', err.message)
+    }
+
+    console.log(`[healing] Recovery request sent for ${serviceName}`)
+
     if (issue !== 'NORMAL') {
-      const rootCause = 'payment-service overloaded'
+      const anomalyType = issue
+      const svcState = serviceState[serviceName] || {}
+
+      const severity = Math.min(
+        100,
+        Math.round(
+          ((svcState.cpu || 0) +
+            (svcState.memory || 0) +
+            (svcState.errorRate || 0)) /
+            3
+        )
+      )
+      const rootCause = `${serviceName} unhealthy`
       const recommendation = 'Restart payment-service'
 
       await pool.query(
@@ -494,7 +550,8 @@ async function handleFailure (serviceName, reason, issue = 'UNKNOWN') {
     severity = EXCLUDED.severity,
     root_cause = EXCLUDED.root_cause,
     recommendation = EXCLUDED.recommendation,
-    updated_at = NOW()`,
+    updated_at = NOW()
+`,
         [serviceName, anomalyType, severity, rootCause, recommendation]
       )
     }
@@ -562,8 +619,22 @@ async function sendAlert (serviceName, reason) {
 ───────────────────────────────────────────── */
 
 /* Live snapshot of all services */
-app.get('/dashboard/health', (req, res) => {
-  res.json(Object.values(serviceState))
+app.get('/dashboard/health', async (req, res) => {
+  try {
+    const newData = Object.values(serviceState)
+
+    // update cache only if valid data exists
+    if (newData.length > 0) {
+      serviceStateCache = newData
+    }
+
+    res.json(serviceStateCache)
+  } catch (err) {
+    console.error('[dashboard health]', err.message)
+
+    // return cached data instead of blank dashboard
+    res.json(serviceStateCache)
+  }
 })
 
 /* Last N metric rows per service (default 50) */
@@ -730,11 +801,16 @@ app.get('/dashboard/heatmap', (req, res) => {
 ───────────────────────────────────────────── */
 async function monitoringLoop () {
   console.log('[monitoring] Starting collection loop...')
-  while (true) {
-    await checkServices()
-    await delay(10000)
-  }
+
+  setInterval(async () => {
+    try {
+      await checkServices()
+    } catch (err) {
+      console.error('[monitoring loop]', err.message)
+    }
+  }, 10000)
 }
+
 setInterval(async () => {
   await pool.query(`
     DELETE FROM metrics

@@ -20,29 +20,28 @@
 require('dotenv').config()
 
 const express = require('express')
-const axios   = require('axios')
-const cors    = require('cors')
-const Docker  = require('dockerode')
+const axios = require('axios')
+const cors = require('cors')
+const Docker = require('dockerode')
 const pool = require('../shared/db')
 const helmet = require('helmet')
 const rateLimit = require('express-rate-limit')
-
 
 const app = express()
 app.use(cors())
 app.use(express.json())
 app.use(helmet())
 
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100
-}))
-
-
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100
+  })
+)
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' })
 
-const circuitBreakerState = {}  // { [serviceName]: { open: bool, timestamp: ms } }
+const circuitBreakerState = {} // { [serviceName]: { open: bool, timestamp: ms } }
 
 /* ─────────────────────────────────────────────────
    HEALING ACTIONS
@@ -51,7 +50,7 @@ const circuitBreakerState = {}  // { [serviceName]: { open: bool, timestamp: ms 
 async function healRestartContainer (serviceName) {
   try {
     const containerName = `self-healing-system-${serviceName}-1`
-    const container     = docker.getContainer(containerName)
+    const container = docker.getContainer(containerName)
     await container.restart()
     return {
       action: 'RESTART_CONTAINER',
@@ -70,7 +69,11 @@ async function healRestartContainer (serviceName) {
 async function healClearCache (serviceName) {
   try {
     /* Try to call the service's /cache/clear endpoint if it exists */
-    await axios.post(`http://${serviceName}:${getPort(serviceName)}/cache/clear`, {}, { timeout: 3000 })
+    await axios.post(
+      `http://${serviceName}:${getPort(serviceName)}/cache/clear`,
+      {},
+      { timeout: 3000 }
+    )
     return {
       action: 'CLEAR_CACHE',
       status: 'SUCCESS',
@@ -108,7 +111,11 @@ async function healScaleReplicas (serviceName) {
 async function healGracefulDrain (serviceName) {
   try {
     /* Call service's /drain endpoint to stop accepting NEW requests */
-    await axios.post(`http://${serviceName}:${getPort(serviceName)}/drain`, {}, { timeout: 2000 })
+    await axios.post(
+      `http://${serviceName}:${getPort(serviceName)}/drain`,
+      {},
+      { timeout: 2000 }
+    )
     return {
       action: 'GRACEFUL_DRAIN',
       status: 'SUCCESS',
@@ -125,10 +132,10 @@ async function healGracefulDrain (serviceName) {
 
 function getPort (serviceName) {
   const ports = {
-    'auth-service':         4001,
-    'user-service':         4002,
-    'order-service':        4003,
-    'payment-service':      4004,
+    'auth-service': 4001,
+    'user-service': 4002,
+    'order-service': 4003,
+    'payment-service': 4004,
     'notification-service': 4005
   }
   return ports[serviceName] || 4000
@@ -200,7 +207,13 @@ async function healBasedOnDiagnosis (serviceName, diagnosis) {
 
 async function runSmartHealing () {
   try {
-    const services = ['auth-service', 'user-service', 'order-service', 'payment-service', 'notification-service']
+    const services = [
+      'auth-service',
+      'user-service',
+      'order-service',
+      'payment-service',
+      'notification-service'
+    ]
 
     for (const serviceName of services) {
       /* Fetch latest diagnosis */
@@ -219,11 +232,12 @@ async function runSmartHealing () {
       )
 
       const timeSinceLastHealing = lastHealing.rows.length
-        ? (Date.now() - new Date(lastHealing.rows[0].created_at).getTime()) / 1000
+        ? (Date.now() - new Date(lastHealing.rows[0].created_at).getTime()) /
+          1000
         : Infinity
 
       if (timeSinceLastHealing < 60) {
-        continue  // Don't heal again within 60 seconds
+        continue // Don't heal again within 60 seconds
       }
 
       if (diagnosis.severity < 30) continue
@@ -236,11 +250,21 @@ async function runSmartHealing () {
         await pool.query(
           `INSERT INTO healing_actions (service_name, anomaly_type, action_type, action_status, message)
            VALUES ($1, $2, $3, $4, $5)`,
-          [serviceName, diagnosis.anomaly_type, action.action, action.status, action.message]
+          [
+            serviceName,
+            diagnosis.anomaly_type,
+            action.action,
+            action.status,
+            action.message
+          ]
         )
       }
 
-      console.log(`[healing] ${serviceName}: ${diagnosis.anomaly_type} → actions: ${healing.actions.map(a => a.action).join(', ')}`)
+      console.log(
+        `[healing] ${serviceName}: ${
+          diagnosis.anomaly_type
+        } → actions: ${healing.actions.map(a => a.action).join(', ')}`
+      )
     }
   } catch (err) {
     console.error('[healing] error:', err.message)
@@ -258,24 +282,57 @@ app.get('/health', (req, res) => {
 /* Manual heal trigger */
 app.post('/heal/:service', async (req, res) => {
   const { service } = req.params
-  const diagResult  = await pool.query(
+  const diagResult = await pool.query(
     `SELECT * FROM diagnoses WHERE service_name = $1 ORDER BY created_at DESC LIMIT 1`,
     [service]
   )
-  const diagnosis   = diagResult.rows[0]
-  const healing     = await healBasedOnDiagnosis(service, diagnosis)
+  const diagnosis = diagResult.rows[0]
+  const healing = await healBasedOnDiagnosis(service, diagnosis)
 
   for (const action of healing.actions) {
     await pool.query(
       `INSERT INTO healing_actions (service_name, anomaly_type, action_type, action_status, message)
        VALUES ($1, $2, $3, $4, $5)`,
-      [service, diagnosis?.anomaly_type, action.action, action.status, action.message]
+      [
+        service,
+        diagnosis?.anomaly_type,
+        action.action,
+        action.status,
+        action.message
+      ]
     )
   }
 
   res.json(healing)
 })
 
+app.post('/heal', async (req, res) => {
+  try {
+    const { serviceName } = req.body
+
+    console.log(`[healing-service] Restarting ${serviceName}`)
+
+    const container = docker.getContainer(
+      `self-healing-system-${serviceName}-1`
+    )
+
+    await container.restart()
+
+    console.log(`[healing-service] ${serviceName} restarted`)
+
+    res.json({
+      success: true,
+      message: `${serviceName} restarted`
+    })
+  } catch (err) {
+    console.error('[healing-service]', err.message)
+
+    res.status(500).json({
+      success: false,
+      error: err.message
+    })
+  }
+})
 /* Healing history */
 app.get('/history/:service', async (req, res) => {
   try {
@@ -308,7 +365,7 @@ async function healingLoop () {
   console.log('[healing] Starting smart healing engine...')
   while (true) {
     await runSmartHealing()
-    await new Promise(r => setTimeout(r, 60000))  // run every 60s
+    await new Promise(r => setTimeout(r, 60000)) // run every 60s
   }
 }
 

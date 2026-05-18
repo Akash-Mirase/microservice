@@ -2,7 +2,7 @@
   "name": "self-healing-system",
   "version": "1.0.0",
   "description": "",
-  "main": "server.js",
+  "main": "gateway/api-gateway.js",
   "scripts": {
     "test": "jest"
   },

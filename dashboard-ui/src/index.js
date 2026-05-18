@@ -1,17 +1,30 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import axios from 'axios';
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+// Suppress axios network errors from appearing as uncaught runtime errors
+// Services may be temporarily unavailable during startup
+axios.interceptors.response.use(
+  response => response,
+  error => {
+    // silently drop network/CORS errors — the UI handles empty data gracefully
+    return Promise.reject(error);
+  }
 );
 
-// If you want to start measuring performance in your app, pass a function
-// to log results (for example: reportWebVitals(console.log))
-// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
+// Global unhandled promise rejection handler — prevents CRA overlay for API errors
+window.addEventListener('unhandledrejection', event => {
+  if (event.reason && event.reason.isAxiosError) {
+    event.preventDefault();
+  }
+});
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  <App />
+);
+
 reportWebVitals();
